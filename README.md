@@ -1,0 +1,1 @@
+# mpv-player-auto-subtitle-translater-plugin
