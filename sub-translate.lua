@@ -60,8 +60,14 @@ local function display_translated_subtitle(translated_text, time_start, time_end
     local time_duration = tonumber(time_end - time_start) * 1000
     if translated_text then
         mp.msg.info("translated_text: " .. translated_text) -- Print the translated text to the console
+        local screen_height = tonumber(mp.get_property("osd-height"))
+        local screen_width = tonumber(mp.get_property("osd-width"))
+        local vertical_offset = screen_height * 0.5
+        local horizontal_offset = screen_width * 0.5
+
+
         translated_text = translated_text:gsub('"', '\\"')
-        local command_string = string.format("show-text '${osd-ass-cc/0}{\\an5}${osd-ass-cc/1}%s' %i", translated_text, time_duration)
+        local command_string = string.format("show-text '${osd-ass-cc/0}{\\an3}{\\fs15}${osd-ass-cc/1}%s' %i", translated_text, time_duration)
         mp.command(command_string)
     else
         mp.msg.error("Translation error")
@@ -93,7 +99,7 @@ local function check_and_display_subtitles()
     end
 end
 
-local subtitle_check_timer = mp.add_periodic_timer(0.5, check_and_display_subtitles) -- Check every 0.5 seconds
+local subtitle_check_timer = mp.add_periodic_timer(0.3, check_and_display_subtitles) -- Check every 0.5 seconds
 
 mp.register_event("file-loaded", function()
     last_sub_start = nil
