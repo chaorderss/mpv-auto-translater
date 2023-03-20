@@ -4,10 +4,10 @@ local json = require 'dkjson'
 
 -- Set your desired target language here
 local target_language = "zh-CN"
-
+-- Global table for translated subtitles
+translated_subs = {}
 -- Set the pre-fetch delay in seconds
 local pre_fetch_delay = 1
-
 -- Set the path to the output subtitle file
 local function on_file_loaded()
     local video_path = mp.get_property("path")
@@ -80,10 +80,39 @@ local function translate(text, target_language)
     end
 end
 
-local function display_translated_subtitle(translated_text, start_time, end_time)
-    local duration = tonumber(end_time - start_time) * 1000
-    local command_string = string.format("show-text '${osd-ass-cc/0}{\\an5}${osd-ass-cc/1}%s' %i", translated_text, duration)
-    mp.command(command_string)
+local function convert_time_to_seconds(time)
+    local hours, minutes, seconds, milliseconds = string.match(time, "(%d+):(%d+):(%d+)[,%.](%d+)")
+    return tonumber(hours) * 3600 + tonumber(minutes) * 60 + tonumber(seconds) + tonumber(milliseconds) / 1000
+end
+
+local function should_display_subtitle(sub, movie_time, pre_fetch_delay)
+    local start_time_seconds = convert_time_to_seconds(sub.start_time)
+    local end_time_seconds = convert_time_to_seconds(sub.end_time)
+
+    local result = movie_time >= (start_time_seconds - pre_fetch_delay) and movie_time <= end_time_seconds
+
+    if result then
+        print("Subtitle match found - movie_time:", movie_time, " start_time_seconds:", start_time_seconds, " end_time_seconds:", end_time_seconds)
+    end
+
+    return result
+end
+
+-- Function to display the original and translated subtitles at the correct time
+local function display_subtitle(subs, movie_time)
+    for _, sub in ipairs(subs) do
+        if should_display_subtitle(sub, movie_time, pre_fetch_delay) then
+            local translated_text = translated_subs[sub.start_time] or translate(sub.text, target_language)
+            if translated_text then
+                translated_subs[sub.start_time] = translated_text
+                local start_time_seconds = convert_time_to_seconds(sub.start_time) - pre_fetch_delay
+                local end_time_seconds = convert_time_to_seconds(sub.end_time)
+                display_translated_subtitle(translated_text, start_time_seconds + pre_fetch_delay, end_time_seconds)
+                display_original_subtitle(sub.text, start_time_seconds + pre_fetch_delay, end_time_seconds)
+            end
+            break
+        end
+    end
 end
 
 local lfs = require("lfs")
@@ -104,6 +133,28 @@ local function read_file(path)
     return file_content
 end
 
+local function table_to_string(t)
+    local result = {}
+    for k, v in ipairs(t) do
+        result[k] = string.format("{start_time = %s, end_time = %s, text = %s}", v.start_time, v.end_time, v.text)
+    end
+    return "{" .. table.concat(result, ", ") .. "}"
+end
+
+-- Function to convert subtitles table to a string representation
+local function subtitles_to_string(subs)
+    local result = "{"
+    for i, sub in ipairs(subs) do
+        result = result .. string.format("\n[%d] start_time: %s, end_time: %s, text: %s", i, sub.start_time, sub.end_time, sub.text)
+        if i < #subs then
+            result = result .. ","
+        end
+    end
+    result = result .. "\n}"
+    return result
+end
+
+
 local function get_subtitles_from_file(sub_file)
     mp.msg.info('function get_subtitles_from_file sub file:' .. sub_file)
     -- local subtitle_file_path = "/Users/xmxx/Downloads/Star.Trek.Picard.S03E04.1080p.WEB.H264-CAKES[rarbg]/star.trek.picard.s03e04.1080p.web.h264-cakes.ass"
@@ -115,28 +166,18 @@ local function get_subtitles_from_file(sub_file)
         print("get_subtitles_from_file Failed to load subtitles from file")
     else
         print("Subtitle content:")
-        print(subtitle_content)
+        --print(subtitle_content)
     end
 
-    for start_time, end_time, text in string.gmatch(subtitle_content, "Dialogue: [%d,]*:(%d%d:%d%d:%d%d%.%d%d),(%d%d:%d%d:%d%d%.%d%d),[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,([^%s].-)\n") do
+    for layer, start_time, end_time, style, name, marginL, marginR, marginV, effect, text in string.gmatch(subtitle_content, "Dialogue: (%d+),(%d+:%d+:%d+[,.]%d+),(%d+:%d+:%d+[,.]%d+),([^,]*),([^,]*),(%d+),(%d+),(%d+),([^,]*),([^%s].-)\n") do
+        --print("get_subtitles_from_file",start_time, end_time,text)
         table.insert(subs, { start_time = start_time, end_time = end_time, text = text })
     end
 
-    print("Size of subs table: " .. #subs)
-    for i, sub in ipairs(subs) do
-        print("Subtitle entry " .. i .. ":")
-        print("Start time: " .. sub.start_time)
-        print("End time: " .. sub.end_time)
-        print("Text: " .. sub.text)
-    end
-
+    print('get_subtitles_from_file',table_to_string(subs))
     return subs
 end
 
-local function convert_time_to_seconds(time)
-    local hours, minutes, seconds, milliseconds = string.match(time, "(%d+):(%d+):(%d+),(%d+)")
-    return tonumber(hours) * 3600 + tonumber(minutes) * 60 + tonumber(seconds) + tonumber(milliseconds) / 1000
-end
 
 local function main()
     local video_file = mp.get_property("path")
@@ -157,27 +198,64 @@ local function main()
         return
     end
 
-    local subs = get_subtitles_from_file(output_sub_file)
-    if not subs or #subs == 0 then
+    subs = get_subtitles_from_file(output_sub_file)
+    if not subs then
         mp.msg.error("main Failed to load subtitles from file")
         return
     end
 
-    for i, sub in ipairs(subs) do
-        mp.msg.info('sub:', sub)
-        local start_time = convert_time_to_seconds(sub.start_time) - pre_fetch_delay
-        local end_time = convert_time_to_seconds(sub.end_time)
 
-        mp.add_timeout(start_time, function()
-            local translated_text = translate(sub.text, target_language)
-            if translated_text then
-                display_translated_subtitle(translated_text, start_time + pre_fetch_delay, end_time)
+end
+
+-- Helper function to check if a subtitle is already translated
+local function is_translated(sub)
+    return translated_subs[sub.start_time] ~= nil
+end
+
+-- Event handler for the "time-pos" property
+local function on_time_pos_change(_, movie_time)
+    if not movie_time then return end
+    if not subs or #subs == 0 then return end
+
+    local current_subtitles = {}
+    local next_subs_count = 0
+    local min_time_diff = 3
+
+    for i, sub in ipairs(subs) do
+        local start_time_seconds = convert_time_to_seconds(sub.start_time)
+        local end_time_seconds = convert_time_to_seconds(sub.end_time)
+
+        if movie_time >= start_time_seconds and movie_time <= end_time_seconds then
+            table.insert(current_subtitles, sub)
+        elseif movie_time < start_time_seconds then
+            if next_subs_count < 2 or (start_time_seconds - movie_time) < min_time_diff then
+                table.insert(current_subtitles, sub)
+                next_subs_count = next_subs_count + 1
+            else
+                break
             end
-        end)
+        end
+    end
+
+    if #current_subtitles > 0 then
+        print("on_time_pos_change current_subtitles:", subtitles_to_string(current_subtitles))
+        for i, sub in ipairs(current_subtitles) do
+            if not is_translated(sub) then
+                local translated_text = translate(sub.text, target_language)
+                if translated_text then
+                    translated_subs[sub.start_time] = translated_text
+                end
+            end
+        end
+        display_subtitle(current_subtitles, movie_time)
+    else
+        print("No matching subtitle found for movie_time:", movie_time)
     end
 end
 
 
-
+-- Observe the "time-pos" property to display subtitles at the correct time
+mp.observe_property("time-pos", "number", on_time_pos_change)
 mp.register_event("file-loaded", main)
 mp.register_event("file-loaded", on_file_loaded)
+
