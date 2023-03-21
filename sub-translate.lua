@@ -39,10 +39,10 @@ local function urlencode(str)
     return str
 end
 
-local function extract_embedded_subtitles(video_file, output_sub_file)
+local function extract_embedded_subtitles(video_file, output_sub_file, stream_index)
     local args = {
         "ffmpeg", "-y", "-nostdin", "-i", video_file,
-        "-c:s", "copy", "-vn", "-an", "-map", "0:s", output_sub_file
+        "-c:s", "copy", "-vn", "-an", "-map", "0:s:" .. tostring(stream_index), output_sub_file
     }
 
     local res = utils.subprocess({ args = args })
@@ -55,6 +55,7 @@ local function extract_embedded_subtitles(video_file, output_sub_file)
 
     return true
 end
+
 
 
 local function translate(text, target_language)
@@ -97,6 +98,29 @@ local function should_display_subtitle(sub, movie_time, pre_fetch_delay)
 
     return result
 end
+
+local function format_ass_time(seconds)
+    local hours = math.floor(seconds / 3600)
+    local minutes = math.floor((seconds % 3600) / 60)
+    local secs = math.floor(seconds % 60)
+    local centisecs = math.floor((seconds * 100) % 100)
+    return string.format("%02d:%02d:%02d.%02d", hours, minutes, secs, centisecs)
+end
+
+local function display_translated_subtitle(text, start_time, end_time)
+    local ass_header = "[Script Info]\nScriptType: v4.00+\nPlayResX: 384\nPlayResY: 288\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    local ass_dialogue = string.format("Dialogue: 0,%s,%s,Default,,0,0,0,,{\\an8}%s", format_ass_time(start_time), format_ass_time(end_time), text)
+    mp.commandv("sub-add", "memory://" .. ass_header .. ass_dialogue, "select")
+end
+
+local function display_original_subtitle(text, start_time, end_time)
+    local ass_header = "[Script Info]\nScriptType: v4.00+\nPlayResX: 384\nPlayResY: 288\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    local ass_dialogue = string.format("Dialogue: 0,%s,%s,Default,,0,0,0,,{\\an2}%s", format_ass_time(start_time), format_ass_time(end_time), text)
+    mp.commandv("sub-add", "memory://" .. ass_header .. ass_dialogue, "select")
+end
+
+
+
 
 -- Function to display the original and translated subtitles at the correct time
 local function display_subtitle(subs, movie_time)
@@ -197,6 +221,7 @@ local function main()
         mp.msg.error("Failed to extract embedded subtitles")
         return
     end
+
 
     subs = get_subtitles_from_file(output_sub_file)
     if not subs then
