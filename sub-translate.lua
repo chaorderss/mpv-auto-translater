@@ -59,6 +59,21 @@ local function extract_embedded_subtitles(video_file, output_sub_file, stream_in
     return true
 end
 
+local function print_current_and_next_translated_subs(movie_time)
+    print("Current and next 3 translated subtitles:")
+    local found_count = 0
+
+    for _, sub in ipairs(subs) do
+        local start_time_seconds = convert_time_to_seconds(sub.start_time)
+        local end_time_seconds = convert_time_to_seconds(sub.end_time)
+
+        if found_count < 4 and movie_time <= end_time_seconds then
+            local translated_text = translated_subs[sub.start_time] or ""
+            print("[" .. sub.start_time .. "] " .. translated_text)
+            found_count = found_count + 1
+        end
+    end
+end
 
 
 local function translate(text, target_language)
@@ -118,32 +133,43 @@ local function display_subtitles(original_text, translated_text, start_time, end
 
     print("text_to_show",text_to_show)
     -- "show-text '${osd-ass-cc/0}{\\an5}${osd-ass-cc/1}%s' %i"
-    local command_string = string.format("show-text '${osd-ass-cc/0}{\\an5}${osd-ass-cc/1}%s' %i", formatted_translated_text, duration)
+    --local command_string = string.format("show-text '${osd-ass-cc/0}{\\an5}${osd-ass-cc/1}%s' %i", formatted_translated_text, duration)
+    local command_string = string.format("show-text '${osd-ass-cc/0}{\\an2}%s' %i", text_to_show, duration)
     -- Modify the following line to include custom positioning and alignment
     mp.command(command_string)
 
 end
 
-
-
-
-
-
--- Function to display the original and translated subtitles at the correct time
 local function display_subtitle(subs, movie_time)
-    for _, sub in ipairs(subs) do
+    for i, sub in ipairs(subs) do
         if should_display_subtitle(sub, movie_time, pre_fetch_delay) then
             local translated_text = translated_subs[sub.start_time] or sub.text
             if translated_text then
                 translated_subs[sub.start_time] = translated_text
                 local start_time_seconds = convert_time_to_seconds(sub.start_time) - pre_fetch_delay
                 local end_time_seconds = convert_time_to_seconds(sub.end_time)
+
+                -- Check if the next subtitle's start time is now
+                local next_sub = subs[i + 1]
+                if next_sub then
+                    local next_start_time_seconds = convert_time_to_seconds(next_sub.start_time)
+                    if next_start_time_seconds <= movie_time then
+                        -- Remove current subtitle
+                        table.remove(subs, i)
+
+                        -- Display and translate the next subtitle
+                        display_subtitle(subs, movie_time)
+                        return
+                    end
+                end
+
                 display_subtitles(sub.text, translated_text, start_time_seconds + pre_fetch_delay, end_time_seconds)
             end
             break
         end
     end
 end
+
 
 
 local lfs = require("lfs")
@@ -248,7 +274,7 @@ end
 local function on_time_pos_change(_, movie_time)
     if not movie_time then return end
     if not subs or #subs == 0 then return end
-
+    --print_current_and_next_translated_subs(movie_time)
     local current_subtitles = {}
     local next_subs_count = 0
     local min_time_diff = 10
@@ -270,10 +296,11 @@ local function on_time_pos_change(_, movie_time)
     end
 
     if #current_subtitles > 0 then
-        print("on_time_pos_change current_subtitles:", subtitles_to_string(current_subtitles))
+        --print("on_time_pos_change current_subtitles:", subtitles_to_string(current_subtitles))
         for i, sub in ipairs(current_subtitles) do
             if not is_translated(sub) then
                 local translated_text = translate(sub.text, target_language)
+                --print('translated_text: ',translated_text)
                 if translated_text then
                     translated_subs[sub.start_time] = translated_text
                 end
@@ -293,7 +320,7 @@ local function timer_callback()
     on_time_pos_change(nil, movie_time)
 end
 
-local timer = mp.add_periodic_timer(0.3, timer_callback)
+local timer = mp.add_periodic_timer(0.2, timer_callback)
 
 mp.register_event("file-loaded", main)
 mp.register_event("file-loaded", on_file_loaded)
