@@ -9,6 +9,9 @@ translated_subs = {}
 -- Set the pre-fetch delay in seconds
 local pre_fetch_delay = 1
 -- Set the path to the output subtitle file
+local prev_translated_id = nil
+local prev_original_id = nil
+
 local function on_file_loaded()
     local video_path = mp.get_property("path")
 
@@ -107,17 +110,14 @@ local function format_ass_time(seconds)
     return string.format("%02d:%02d:%02d.%02d", hours, minutes, secs, centisecs)
 end
 
-local function display_translated_subtitle(text, start_time, end_time)
-    local ass_header = "[Script Info]\nScriptType: v4.00+\nPlayResX: 384\nPlayResY: 288\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-    local ass_dialogue = string.format("Dialogue: 0,%s,%s,Default,,0,0,0,,{\\an8}%s", format_ass_time(start_time), format_ass_time(end_time), text)
-    mp.commandv("sub-add", "memory://" .. ass_header .. ass_dialogue, "select")
+local function display_subtitles(original_text, translated_text, start_time, end_time)
+    local duration = end_time - start_time
+    local formatted_original_text = string.gsub(original_text, "\\N", "\n")
+    local formatted_translated_text = string.gsub(translated_text, "\\N", "\n")
+    local text_to_show = string.format("%s\n\n%s", formatted_original_text, formatted_translated_text)
+    mp.commandv("show-text", text_to_show, duration * 1000)
 end
 
-local function display_original_subtitle(text, start_time, end_time)
-    local ass_header = "[Script Info]\nScriptType: v4.00+\nPlayResX: 384\nPlayResY: 288\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-    local ass_dialogue = string.format("Dialogue: 0,%s,%s,Default,,0,0,0,,{\\an2}%s", format_ass_time(start_time), format_ass_time(end_time), text)
-    mp.commandv("sub-add", "memory://" .. ass_header .. ass_dialogue, "select")
-end
 
 
 
@@ -131,13 +131,13 @@ local function display_subtitle(subs, movie_time)
                 translated_subs[sub.start_time] = translated_text
                 local start_time_seconds = convert_time_to_seconds(sub.start_time) - pre_fetch_delay
                 local end_time_seconds = convert_time_to_seconds(sub.end_time)
-                display_translated_subtitle(translated_text, start_time_seconds + pre_fetch_delay, end_time_seconds)
-                display_original_subtitle(sub.text, start_time_seconds + pre_fetch_delay, end_time_seconds)
+                display_subtitles(sub.text, translated_text, start_time_seconds + pre_fetch_delay, end_time_seconds)
             end
             break
         end
     end
 end
+
 
 local lfs = require("lfs")
 
