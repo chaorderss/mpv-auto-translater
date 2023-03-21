@@ -111,12 +111,19 @@ local function format_ass_time(seconds)
 end
 
 local function display_subtitles(original_text, translated_text, start_time, end_time)
-    local duration = end_time - start_time
+    local duration = (end_time - start_time) * 1000
     local formatted_original_text = string.gsub(original_text, "\\N", "\n")
     local formatted_translated_text = string.gsub(translated_text, "\\N", "\n")
     local text_to_show = string.format("%s\n\n%s", formatted_original_text, formatted_translated_text)
-    mp.commandv("show-text", text_to_show, duration * 1000)
+
+    print("text_to_show",text_to_show)
+    -- "show-text '${osd-ass-cc/0}{\\an5}${osd-ass-cc/1}%s' %i"
+    local command_string = string.format("show-text '${osd-ass-cc/0}{\\an5}${osd-ass-cc/1}%s' %i", formatted_translated_text, duration)
+    -- Modify the following line to include custom positioning and alignment
+    mp.command(command_string)
+
 end
+
 
 
 
@@ -126,7 +133,7 @@ end
 local function display_subtitle(subs, movie_time)
     for _, sub in ipairs(subs) do
         if should_display_subtitle(sub, movie_time, pre_fetch_delay) then
-            local translated_text = translated_subs[sub.start_time] or translate(sub.text, target_language)
+            local translated_text = translated_subs[sub.start_time] or sub.text
             if translated_text then
                 translated_subs[sub.start_time] = translated_text
                 local start_time_seconds = convert_time_to_seconds(sub.start_time) - pre_fetch_delay
@@ -244,7 +251,7 @@ local function on_time_pos_change(_, movie_time)
 
     local current_subtitles = {}
     local next_subs_count = 0
-    local min_time_diff = 3
+    local min_time_diff = 10
 
     for i, sub in ipairs(subs) do
         local start_time_seconds = convert_time_to_seconds(sub.start_time)
@@ -253,7 +260,7 @@ local function on_time_pos_change(_, movie_time)
         if movie_time >= start_time_seconds and movie_time <= end_time_seconds then
             table.insert(current_subtitles, sub)
         elseif movie_time < start_time_seconds then
-            if next_subs_count < 2 or (start_time_seconds - movie_time) < min_time_diff then
+            if next_subs_count < 4 or (start_time_seconds - movie_time) < min_time_diff then
                 table.insert(current_subtitles, sub)
                 next_subs_count = next_subs_count + 1
             else
@@ -280,7 +287,14 @@ end
 
 
 -- Observe the "time-pos" property to display subtitles at the correct time
-mp.observe_property("time-pos", "number", on_time_pos_change)
+--mp.observe_property("time-pos", "number", on_time_pos_change)
+local function timer_callback()
+    local movie_time = mp.get_property_number("time-pos")
+    on_time_pos_change(nil, movie_time)
+end
+
+local timer = mp.add_periodic_timer(0.3, timer_callback)
+
 mp.register_event("file-loaded", main)
 mp.register_event("file-loaded", on_file_loaded)
 
