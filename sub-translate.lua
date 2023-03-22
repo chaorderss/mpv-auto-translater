@@ -1,6 +1,8 @@
 local mp = require 'mp'
 local utils = require 'mp.utils'
 local json = require 'dkjson'
+local md5 = require("md5")
+local http = require("socket.http")
 
 -- Set your desired target language here
 local target_language = "zh-CN"
@@ -99,16 +101,42 @@ local function translate(text, target_language)
     end
 end
 
+local function baidu_translate(text, target_language)
+    local app_id = "" -- Replace with your Baidu API App ID
+    local secret_key = "" -- Replace with your Baidu API Secret Key
+    local salt = tostring(os.time())
+
+    --local openssl = require("openssl")
+    local sign = app_id .. text .. salt .. secret_key
+    local sign_md5 = md5.sumhexa(sign)
+
+    local url_request = string.format("https://fanyi-api.baidu.com/api/trans/vip/translate?q=%s&from=auto&to=%s&appid=%s&salt=%s&sign=%s",
+                                      urlencode(text), target_language, app_id, salt, sign_md5)
+    local response_body, response_code, response_headers, response_status = http.request(url_request)
+    if not response then
+        print("Error in translation request:", error_message)
+        return nil
+    end
+
+    local result = utils.parse_json(response)
+    if result and result.trans_result then
+        return table.concat(result.trans_result, " ", function(item) return item.dst end)
+    end
+
+    return nil
+end
+
 local function convert_time_to_seconds(time)
     local hours, minutes, seconds, milliseconds = string.match(time, "(%d+):(%d+):(%d+)[,%.](%d+)")
     return tonumber(hours) * 3600 + tonumber(minutes) * 60 + tonumber(seconds) + tonumber(milliseconds) / 1000
 end
 
-local function should_display_subtitle(sub, movie_time, pre_fetch_delay)
+local function should_display_subtitle(sub, movie_time)
     local start_time_seconds = convert_time_to_seconds(sub.start_time)
     local end_time_seconds = convert_time_to_seconds(sub.end_time)
+    local tolerance = 0.5
 
-    local result = movie_time >= (start_time_seconds - pre_fetch_delay) and movie_time <= end_time_seconds
+    local result = movie_time >= (start_time_seconds - tolerance) and movie_time <= end_time_seconds
 
     if result then
         print("Subtitle match found - movie_time:", movie_time, " start_time_seconds:", start_time_seconds, " end_time_seconds:", end_time_seconds)
@@ -117,6 +145,8 @@ local function should_display_subtitle(sub, movie_time, pre_fetch_delay)
     return result
 end
 
+
+
 local function format_ass_time(seconds)
     local hours = math.floor(seconds / 3600)
     local minutes = math.floor((seconds % 3600) / 60)
@@ -124,29 +154,38 @@ local function format_ass_time(seconds)
     local centisecs = math.floor((seconds * 100) % 100)
     return string.format("%02d:%02d:%02d.%02d", hours, minutes, secs, centisecs)
 end
+local function escape_special_characters(str)
+    local escaped_str = string.gsub(str, '([\\{}%[%]%(%)%\\])', '\\%1') -- Escape necessary characters
+    escaped_str = string.gsub(escaped_str, '\n', ' ') -- Replace LF with a blank space
+    return escaped_str
+end
 
 local function display_subtitles(original_text, translated_text, start_time, end_time)
-    local duration = (end_time - start_time) * 1000
+    local duration = math.floor((end_time - start_time) * 1000)
     local formatted_original_text = string.gsub(original_text, "\\N", "\n")
     local formatted_translated_text = string.gsub(translated_text, "\\N", "\n")
-    local text_to_show = string.format("%s\n\n%s", formatted_original_text, formatted_translated_text)
+    local text_to_show = string.format("%s\n%s", escape_special_characters(formatted_original_text), escape_special_characters(formatted_translated_text))
+    --text_to_show = escape_special_characters(text_to_show)
+    text_to_show = string.gsub(text_to_show, "'", " ")
 
-    print("text_to_show",text_to_show)
-    -- "show-text '${osd-ass-cc/0}{\\an5}${osd-ass-cc/1}%s' %i"
-    --local command_string = string.format("show-text '${osd-ass-cc/0}{\\an5}${osd-ass-cc/1}%s' %i", formatted_translated_text, duration)
-    local command_string = string.format("show-text '${osd-ass-cc/0}{\\an2}%s' %i", text_to_show, duration)
-    -- Modify the following line to include custom positioning and alignment
+    local command_string = string.format("show-text '${osd-ass-cc/0}{\\an2}{\\fs15}${osd-ass-cc/1}%s' %i", text_to_show, duration)
+    print('display_subtitles command_string: ', command_string, 'duration:', duration)
     mp.command(command_string)
-
 end
+
+
+
+
+
+
 
 local function display_subtitle(subs, movie_time)
     for i, sub in ipairs(subs) do
-        if should_display_subtitle(sub, movie_time, pre_fetch_delay) then
+        if should_display_subtitle(sub, movie_time) then
             local translated_text = translated_subs[sub.start_time] or sub.text
             if translated_text then
                 translated_subs[sub.start_time] = translated_text
-                local start_time_seconds = convert_time_to_seconds(sub.start_time) - pre_fetch_delay
+                local start_time_seconds = convert_time_to_seconds(sub.start_time)
                 local end_time_seconds = convert_time_to_seconds(sub.end_time)
 
                 -- Check if the next subtitle's start time is now
@@ -163,12 +202,13 @@ local function display_subtitle(subs, movie_time)
                     end
                 end
 
-                display_subtitles(sub.text, translated_text, start_time_seconds + pre_fetch_delay, end_time_seconds)
+                display_subtitles(sub.text, translated_text, start_time_seconds, end_time_seconds)
             end
             break
         end
     end
 end
+
 
 
 
@@ -277,7 +317,7 @@ local function on_time_pos_change(_, movie_time)
     --print_current_and_next_translated_subs(movie_time)
     local current_subtitles = {}
     local next_subs_count = 0
-    local min_time_diff = 10
+    local min_time_diff = 20
 
     for i, sub in ipairs(subs) do
         local start_time_seconds = convert_time_to_seconds(sub.start_time)
@@ -286,7 +326,7 @@ local function on_time_pos_change(_, movie_time)
         if movie_time >= start_time_seconds and movie_time <= end_time_seconds then
             table.insert(current_subtitles, sub)
         elseif movie_time < start_time_seconds then
-            if next_subs_count < 4 or (start_time_seconds - movie_time) < min_time_diff then
+            if next_subs_count < 10 or (start_time_seconds - movie_time) < min_time_diff then
                 table.insert(current_subtitles, sub)
                 next_subs_count = next_subs_count + 1
             else
@@ -300,6 +340,7 @@ local function on_time_pos_change(_, movie_time)
         for i, sub in ipairs(current_subtitles) do
             if not is_translated(sub) then
                 local translated_text = translate(sub.text, target_language)
+                --local translated_text = baidu_translate(sub.text, target_language)
                 --print('translated_text: ',translated_text)
                 if translated_text then
                     translated_subs[sub.start_time] = translated_text
