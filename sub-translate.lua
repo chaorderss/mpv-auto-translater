@@ -13,7 +13,10 @@ local pre_fetch_delay = 1
 -- Set the path to the output subtitle file
 local prev_translated_id = nil
 local prev_original_id = nil
-
+local subs
+local tolerance = 0.2
+local min_time_diff = 60
+local totranslate_sub_num = 20
 local function on_file_loaded()
     local video_path = mp.get_property("path")
 
@@ -28,10 +31,37 @@ local function on_file_loaded()
         return
     end
 end
+local function convert_time_to_seconds(time)
+    local hours, minutes, seconds, milliseconds = string.match(time, "(%d+):(%d+):(%d+)[,%.](%d+)")
+    return tonumber(hours) * 3600 + tonumber(minutes) * 60 + tonumber(seconds) + tonumber(milliseconds) / 1000
+end
+local function table_to_string(tbl, indent)
+    if not indent then indent = 0 end
 
+    local to_visit = {}
+    local output = {}
 
--- Set the stream index of the embedded subtitle you want to extract
-local stream_index = 0
+    to_visit[#to_visit + 1] = {tbl = tbl, indent = indent}
+
+    while #to_visit > 0 do
+        local next = table.remove(to_visit)
+        local tbl, indent = next.tbl, next.indent
+
+        for k, v in pairs(tbl) do
+            local formatting = string.rep("  ", indent) .. k .. ": "
+            if type(v) == "table" then
+                output[#output + 1] = formatting
+                to_visit[#to_visit + 1] = {tbl = v, indent = indent + 1}
+            else
+                output[#output + 1] = formatting .. tostring(v)
+            end
+        end
+    end
+
+    return table.concat(output, "\n")
+end
+-- -- Set the stream index of the embedded subtitle you want to extract
+-- local stream_index = 0
 
 local function urlencode(str)
     if str then
@@ -44,12 +74,15 @@ local function urlencode(str)
     return str
 end
 
-local function extract_embedded_subtitles(video_file, output_sub_file, stream_index)
+local function extract_embedded_subtitles(video_file, output_sub_file, stream_index, sub_format)
     local args = {
-        "ffmpeg", "-y", "-nostdin", "-i", video_file,
-        "-c:s", "copy", "-vn", "-an", "-map", "0:s:" .. tostring(stream_index), output_sub_file
+        "ffmpeg", "-y", "-loglevel", "quiet","-nostdin", "-i", video_file,
+        "-c:s", "copy", "-vn", "-an", "-map", "0:" .. tostring(stream_index) .. "?", output_sub_file .. "." .. sub_format
     }
+    local ffmpeg_cmd = table.concat(args, " ")
+    mp.msg.info("ffmpeg command: " .. ffmpeg_cmd)
 
+    mp.msg.info('extract_embedded_subtitles: ', table_to_string(args))
     local res = utils.subprocess({ args = args })
     if res.status ~= 0 then
         mp.msg.error("Failed to extract embedded subtitles using ffmpeg")
@@ -62,21 +95,20 @@ local function extract_embedded_subtitles(video_file, output_sub_file, stream_in
 end
 
 local function print_current_and_next_translated_subs(movie_time)
-    print("Current and next 3 translated subtitles:")
+    print("Current and next 4 translated subtitles:")
     local found_count = 0
 
     for _, sub in ipairs(subs) do
         local start_time_seconds = convert_time_to_seconds(sub.start_time)
         local end_time_seconds = convert_time_to_seconds(sub.end_time)
 
-        if found_count < 4 and movie_time <= end_time_seconds then
+        if found_count < 5 and movie_time <= end_time_seconds then
             local translated_text = translated_subs[sub.start_time] or ""
             print("[" .. sub.start_time .. "] " .. translated_text)
             found_count = found_count + 1
         end
     end
 end
-
 
 local function translate(text, target_language)
     local url_request = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=" .. target_language .. "&dt=t&q=" .. urlencode(text)
@@ -126,16 +158,9 @@ local function baidu_translate(text, target_language)
     return nil
 end
 
-local function convert_time_to_seconds(time)
-    local hours, minutes, seconds, milliseconds = string.match(time, "(%d+):(%d+):(%d+)[,%.](%d+)")
-    return tonumber(hours) * 3600 + tonumber(minutes) * 60 + tonumber(seconds) + tonumber(milliseconds) / 1000
-end
-
 local function should_display_subtitle(sub, movie_time)
     local start_time_seconds = convert_time_to_seconds(sub.start_time)
     local end_time_seconds = convert_time_to_seconds(sub.end_time)
-    local tolerance = 0.5
-
     local result = movie_time >= (start_time_seconds - tolerance) and movie_time <= end_time_seconds
 
     if result then
@@ -144,8 +169,6 @@ local function should_display_subtitle(sub, movie_time)
 
     return result
 end
-
-
 
 local function format_ass_time(seconds)
     local hours = math.floor(seconds / 3600)
@@ -172,12 +195,6 @@ local function display_subtitles(original_text, translated_text, start_time, end
     print('display_subtitles command_string: ', command_string, 'duration:', duration)
     mp.command(command_string)
 end
-
-
-
-
-
-
 
 local function display_subtitle(subs, movie_time)
     for i, sub in ipairs(subs) do
@@ -209,9 +226,6 @@ local function display_subtitle(subs, movie_time)
     end
 end
 
-
-
-
 local lfs = require("lfs")
 
 local function read_file(path)
@@ -230,14 +244,13 @@ local function read_file(path)
     return file_content
 end
 
-local function table_to_string(t)
-    local result = {}
-    for k, v in ipairs(t) do
-        result[k] = string.format("{start_time = %s, end_time = %s, text = %s}", v.start_time, v.end_time, v.text)
-    end
-    return "{" .. table.concat(result, ", ") .. "}"
-end
-
+-- local function table_to_string(t)
+--     local result = {}
+--     for k, v in ipairs(t) do
+--         result[k] = string.format("{start_time = %s, end_time = %s, text = %s}", v.start_time, v.end_time, v.text)
+--     end
+--     return "{" .. table.concat(result, ", ") .. "}"
+-- end
 -- Function to convert subtitles table to a string representation
 local function subtitles_to_string(subs)
     local result = "{"
@@ -251,30 +264,193 @@ local function subtitles_to_string(subs)
     return result
 end
 
+local function parse_ass(subtitle_content)
+    local subs = {}
+
+    for layer, start_time, end_time, style, name, marginL, marginR, marginV, effect, text in string.gmatch(subtitle_content, "Dialogue: (%d+),(%d+:%d+:%d+[,.]%d+),(%d+:%d+:%d+[,.]%d+),([^,]*),([^,]*),(%d+),(%d+),(%d+),([^,]*),([^%s].-)\n") do
+        table.insert(subs, { start_time = start_time, end_time = end_time, text = text })
+    end
+
+    return subs
+end
+
+local function parse_srt(subtitle_content)
+    local subs = {}
+
+    for index, start_time, end_time, text in string.gmatch(subtitle_content, "(%d+)\r?\n(%d+:%d+:%d+[,.]%d+)%s+-%-%>%s+(%d+:%d+:%d+[,.]%d+)\r?\n(.-)\r?\n\r?\n") do
+        table.insert(subs, { start_time = start_time, end_time = end_time, text = text })
+    end
+
+    return subs
+end
 
 local function get_subtitles_from_file(sub_file)
     mp.msg.info('function get_subtitles_from_file sub file:' .. sub_file)
-    -- local subtitle_file_path = "/Users/xmxx/Downloads/Star.Trek.Picard.S03E04.1080p.WEB.H264-CAKES[rarbg]/star.trek.picard.s03e04.1080p.web.h264-cakes.ass"
     local subtitle_content = read_file(sub_file)
 
-    local subs = {} -- Add this line to initialize the subs table
+    local subs = {}
 
     if not subtitle_content then
         print("get_subtitles_from_file Failed to load subtitles from file")
     else
-        print("Subtitle content:")
-        --print(subtitle_content)
+        local ext = sub_file:match("^.+(%..+)$")
+        if ext == ".ass" then
+            subs = parse_ass(subtitle_content)
+        elseif ext == ".srt" then
+            subs = parse_srt(subtitle_content)
+        else
+            print("Unsupported subtitle format")
+            return nil
+        end
     end
-
-    for layer, start_time, end_time, style, name, marginL, marginR, marginV, effect, text in string.gmatch(subtitle_content, "Dialogue: (%d+),(%d+:%d+:%d+[,.]%d+),(%d+:%d+:%d+[,.]%d+),([^,]*),([^,]*),(%d+),(%d+),(%d+),([^,]*),([^%s].-)\n") do
-        --print("get_subtitles_from_file",start_time, end_time,text)
-        table.insert(subs, { start_time = start_time, end_time = end_time, text = text })
-    end
-
-    print('get_subtitles_from_file',table_to_string(subs))
+    --print('get_subtitles_from_file subs:',table_to_string(subs))
     return subs
 end
 
+function extract_all_subtitles(video_file, output_sub_file_base)
+    local args = {
+        "ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", "-select_streams", "s", "-i", video_file
+    }
+    local res = utils.subprocess({ args = args })
+
+    if res.status ~= 0 then
+        mp.msg.error("Failed to get subtitle streams information")
+        return false
+    end
+
+    local streams_info = utils.parse_json(res.stdout)
+    if not streams_info or not streams_info["streams"] then
+        mp.msg.error("Failed to parse subtitle streams information")
+        return false
+    end
+
+    for _, stream in ipairs(streams_info["streams"]) do
+        local sub_index = stream["index"]
+        local sub_lang = stream["tags"]["language"] or "unknown"
+        local sub_format = stream["codec_name"]
+        local sub_ext = sub_format == "subrip" and ".srt" or ".ass"
+        local is_sdh = stream["tags"]["title"] and stream["tags"]["title"]:lower():find("sdh") and "_SDH" or ""
+        mp.msg.info("Stream object: " .. utils.to_string(stream))
+        mp.msg.info("Subtitle index: " .. tostring(sub_index))
+
+        local output_sub_file = string.format("%s_%02d_%s%s%s", output_sub_file_base, sub_index, sub_lang, is_sdh, sub_ext)
+        mp.msg.info("Extracting subtitle stream with language: " .. sub_lang)
+
+        if not extract_embedded_subtitles(video_file, output_sub_file, sub_index, sub_ext) then
+            mp.msg.error("Failed to extract subtitle stream with language: " .. sub_lang)
+        end
+    end
+
+    return true
+end
+
+-- Replace the extract_english_subtitles function call with extract_all_subtitles in the main function
+local function main2()
+    local video_file = mp.get_property("path")
+    if not video_file then
+        mp.msg.error("No video file loaded")
+        return
+    end
+
+    local video_dir, video_name = utils.split_path(video_file)
+    local video_name_no_ext = video_name:match("(.+)%..+$")
+    local output_sub_file_base = utils.join_path(video_dir, video_name_no_ext)
+
+    mp.msg.info("output_sub_file_base: " .. output_sub_file_base)
+
+    if not extract_all_subtitles(video_file, output_sub_file_base) then
+        mp.msg.error("Failed to extract all subtitles")
+    end
+end
+
+--mp.register_event("file-loaded", main2)
+function extract_english_subtitles(video_file, output_sub_file)
+    -- Get information about subtitle streams
+    local args = {
+        "ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", "-select_streams", "s", "-i", video_file
+    }
+    local res = utils.subprocess({ args = args })
+
+    if res.status ~= 0 then
+        mp.msg.error("Failed to get subtitle streams information")
+        return false
+    end
+
+    local streams_info = utils.parse_json(res.stdout)
+    if not streams_info or not streams_info.streams then
+        mp.msg.error("Failed to parse subtitle streams information")
+        return false
+    end
+
+    -- Print all available subtitle streams and their language tags
+    for i, stream in ipairs(streams_info.streams) do
+        print(string.format("Stream Index: %d, Language: %s", stream.index, stream.tags and stream.tags.language or "unknown"))
+    end
+
+    -- Find the indices of English subtitle streams and their formats
+    local eng_stream_indices = {}
+    for i, stream in ipairs(streams_info.streams) do
+        if stream.tags and string.lower(stream.tags.language) == "eng" then
+            print(string.format("eng Stream Index: %d, Language: %s", stream.index, stream.tags and stream.tags.language or "unknown"))
+            table.insert(eng_stream_indices, { index = stream.index, format = stream.codec_name })
+        end
+    end
+
+    if #eng_stream_indices == 0 then
+        mp.msg.error("No English subtitle stream found")
+        return false
+    end
+
+    -- Prioritize selecting the SDH stream if available
+    local selected_stream = nil
+    for _, stream in ipairs(eng_stream_indices) do
+        if string.lower(stream.format) == "subrip" and stream.tags and string.lower(stream.tags.title) == "sdh" then
+            selected_stream = stream
+            break
+        end
+    end
+
+    -- If SDH stream is not found, use the first English stream
+    if not selected_stream then
+        selected_stream = eng_stream_indices[1]
+    end
+
+    local eng_stream_index = selected_stream.index
+    local eng_sub_format = selected_stream.format
+
+    if eng_sub_format ~= "ass" and eng_sub_format ~= "subrip" then
+        mp.msg.error("Unsupported subtitle format: " .. eng_sub_format)
+        return false
+    end
+
+    -- Set the output file's extension according to the subtitle format
+    local sub_ext = eng_sub_format == "subrip" and "srt" or "ass"
+    mp.msg.info("...Extract the English subtitle stream")
+
+    -- Extract the English subtitle stream
+    return extract_embedded_subtitles(video_file, output_sub_file, eng_stream_index, sub_ext)
+end
+
+
+local function check_sub_file_exists(path)
+    local file = io.open(path, "r")
+    if file ~= nil then
+        io.close(file)
+        return true
+    else
+        return false
+    end
+end
+local function check_sub_file_exists(path, extensions)
+    for _, ext in ipairs(extensions) do
+        local file = io.open(path .. ext, "r")
+        if file ~= nil then
+            io.close(file)
+            return true, ext
+        end
+    end
+    return false, nil
+end
 
 local function main()
     local video_file = mp.get_property("path")
@@ -284,25 +460,32 @@ local function main()
     end
 
     -- Generate the output_sub_file path based on the video_file path
-        local video_dir, video_name = utils.split_path(video_file)
-        local video_name_no_ext = video_name:match("(.+)%..+$")
-        local output_sub_file = utils.join_path(video_dir, video_name_no_ext .. ".ass")
+    local video_dir, video_name = utils.split_path(video_file)
+    local video_name_no_ext = video_name:match("(.+)%..+$")
+    local output_sub_file = utils.join_path(video_dir, video_name_no_ext)
 
     mp.msg.info("output_sub_file: ".. output_sub_file)
+    local sub_extensions = {'.ass', '.srt'}
+    local subs_exist, sub_ext = check_sub_file_exists(output_sub_file, sub_extensions)
 
-    if not extract_embedded_subtitles(video_file, output_sub_file, stream_index) then
-        mp.msg.error("Failed to extract embedded subtitles")
-        return
+    if not subs_exist then
+        if extract_english_subtitles(video_file, output_sub_file) then
+            subs_exist, sub_ext = check_sub_file_exists(output_sub_file, sub_extensions)
+            if not subs_exist then
+                mp.msg.error("main Failed to load subtitles from file")
+                return
+            end
+        else
+            mp.msg.error("Failed to extract embedded subtitles")
+            return
+        end
     end
 
-
-    subs = get_subtitles_from_file(output_sub_file)
+    subs = get_subtitles_from_file(output_sub_file .. sub_ext)
     if not subs then
         mp.msg.error("main Failed to load subtitles from file")
         return
     end
-
-
 end
 
 -- Helper function to check if a subtitle is already translated
@@ -312,13 +495,12 @@ end
 
 -- Event handler for the "time-pos" property
 local function on_time_pos_change(_, movie_time)
+    --print("on_time_pos_change")
     if not movie_time then return end
     if not subs or #subs == 0 then return end
-    --print_current_and_next_translated_subs(movie_time)
+    print_current_and_next_translated_subs(movie_time)
     local current_subtitles = {}
     local next_subs_count = 0
-    local min_time_diff = 20
-
     for i, sub in ipairs(subs) do
         local start_time_seconds = convert_time_to_seconds(sub.start_time)
         local end_time_seconds = convert_time_to_seconds(sub.end_time)
@@ -352,7 +534,6 @@ local function on_time_pos_change(_, movie_time)
         print("No matching subtitle found for movie_time:", movie_time)
     end
 end
-
 
 -- Observe the "time-pos" property to display subtitles at the correct time
 --mp.observe_property("time-pos", "number", on_time_pos_change)
