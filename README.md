@@ -1,39 +1,45 @@
-# README.md
+# MPV Subtitle Translator
 
-## MPV Plugin: Real-Time Subtitle Translator
+This Lua script for the MPV player extracts embedded subtitles from a video, translates them into a target language, and displays the translated subtitles alongside the original subtitles. The script supports both .ass and .srt subtitle formats.
 
-This MPV plugin provides real-time subtitle translations, fetching translations from the Google Translate API. You can set your desired target language, and the plugin will automatically display the translated subtitles on top of the original subtitles. It's a great way to enjoy foreign-language movies and TV shows without relying on pre-translated subtitles.
+## Features
 
-### Features
+- Extracts embedded subtitles from video files
+- Translates subtitles into a target language using an external translation API
+- Displays translated subtitles alongside the original subtitles
+- Supports both .ass and .srt subtitle formats
 
-- Real-time subtitle translation
-- Target language customization
-- Pre-fetch subtitles in advance
-- Automatic subtitle display
+## Requirements
 
-### Requirements
+- [MPV](https://mpv.io) media player
+- Lua 5.1 or higher
+- [LuaFileSystem (LFS)](https://keplerproject.github.io/luafilesystem/) library
+- FFmpeg and FFprobe installed and available in the system PATH
 
-- MPV media player
-- curl
+## Installation
 
-### Installation
+1. Install the MPV media player, Lua 5.1 or higher, and LuaFileSystem (LFS) library.
+2. Install FFmpeg and FFprobe and ensure they are available in the system PATH.
+3. Save the provided Lua script (first part and second part combined) as `subtitle_translator.lua` in your MPV scripts directory. The default location is `~/.config/mpv/scripts/` on Linux and macOS or `%APPDATA%\mpv\scripts\` on Windows.
 
-1. Copy the `subtitle_translator.lua` file into your MPV scripts directory. You can find this directory by running `mpv --help` and looking for the "Config dir" path, which usually looks like `~/.config/mpv/scripts/` on Unix systems, or `%APPDATA%\mpv\scripts\` on Windows systems.
+## Usage
 
-2. Install the required dependencies. On Unix systems, you can use your package manager, like `apt-get`, `yum`, or `pacman` to install `curl`. On Windows, you can download a precompiled binary from the [curl website](https://curl.se/windows/).
+1. Play a video file with embedded subtitles in MPV.
+2. The script will automatically extract the subtitles, translate them into the target language, and display the translated subtitles alongside the original subtitles.
+3. if subtitles has in the same directary and is the same name of the video.script can load automaticly
 
-### Usage
+## Configuration
 
-To start using the plugin, open a video file in MPV. The plugin will automatically translate and display subtitles in the target language you set in the script. By default, the target language is set to Simplified Chinese (zh-CN).
+You can customize the target language by modifying the `target_language` variable in the script. Change its value to the desired language code (e.g., 'en' for English, 'es' for Spanish, etc.).
 
-To change the target language, open the `subtitle_translator.lua` file in a text editor, and modify the `target_language` variable to the desired language code (e.g., "en" for English, "fr" for French, "es" for Spanish, etc.). Save the file and restart MPV to apply the changes.
+You can also modify the translation function (`translate()`) to use a different translation API or service by replacing the current implementation with the appropriate API calls.
 
-### Known Limitations
+## Limitations
 
-- This plugin relies on the Google Translate API, which is subject to rate limits and may fail if too many requests are made in a short period.
-- Translations may not always be accurate, as they are dependent on the quality of the Google Translate API.
-- This plugin assumes that the original subtitles are well-timed and synchronized with the video.
+- The script may not work correctly if the subtitle timings are incorrect or if the video file contains multiple subtitle streams.
+- The translation quality depends on the translation service used.
+- Baidu api not working at this moment.
 
-### License
+## License
 
-This plugin is released under the GNU General Public License v3.0 (GPLv3). See the LICENSE file for more information.
+This script is provided under the GPLv3 License. For more information, please see the [LICENSE](LICENSE) file.
