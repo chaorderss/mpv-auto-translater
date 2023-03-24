@@ -36,4 +36,4 @@ To change the target language, open the `subtitle_translator.lua` file in a text
 
 ### License
 
-This plugin is released under the MIT License. See the LICENSE file for more information.
+This plugin is released under the GNU General Public License v3.0 (GPLv3). See the LICENSE file for more information.
