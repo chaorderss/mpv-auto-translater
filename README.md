@@ -36,7 +36,7 @@ You can also modify the translation function (`translate()`) to use a different 
 
 ## Limitations
 
-- The script may not work correctly if the subtitle timings are incorrect or if the video file contains multiple subtitle streams.
+- The script may not work correctly if the subtitle timings are incorrect.
 - The translation quality depends on the translation service used.
 - Baidu api not working at this moment.
 
