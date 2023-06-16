@@ -46,6 +46,10 @@ local function on_file_loaded()
         return
     end
 end
+-- Helper function to check if a subtitle is already translated
+local function is_translated(sub)
+    return translated_subs[sub.start_time] ~= nil
+end
 local function convert_time_to_seconds(time)
     local hours, minutes, seconds, milliseconds = string.match(time, "(%d+):(%d+):(%d+)[,%.](%d+)")
     return tonumber(hours) * 3600 + tonumber(minutes) * 60 + tonumber(seconds) + tonumber(milliseconds) / 1000
@@ -199,12 +203,12 @@ local function escape_special_characters(str)
 end
 
 local function display_subtitles(original_text, translated_text, start_time, end_time)
-    local duration = math.floor((end_time - start_time) * 1000)
+    local duration = math.floor((end_time - start_time) * 500)
     local formatted_original_text = string.gsub(original_text, "\\N", "\n")
     local formatted_translated_text = string.gsub(translated_text, "\\N", "\n")
     local text_to_show = string.format("%s\n%s", escape_special_characters(formatted_original_text), escape_special_characters(formatted_translated_text))
     --text_to_show = escape_special_characters(text_to_show)
-    text_to_show = string.gsub(text_to_show, "'", " ")
+    text_to_show = string.gsub(text_to_show, "'", "’")
 
     local command_string = string.format("show-text '${osd-ass-cc/0}{\\an2}{\\fs15}${osd-ass-cc/1}%s' %i", text_to_show, duration)
     print('display_subtitles command_string: ', command_string, 'duration:', duration)
@@ -215,6 +219,7 @@ local function display_subtitle(subs, movie_time)
     for i, sub in ipairs(subs) do
         if should_display_subtitle(sub, movie_time) then
             local translated_text = translated_subs[sub.start_time] or sub.text
+            print("translated_text",translated_text)
             if translated_text then
                 translated_subs[sub.start_time] = translated_text
                 local start_time_seconds = convert_time_to_seconds(sub.start_time)
@@ -503,10 +508,6 @@ local function main()
     end
 end
 
--- Helper function to check if a subtitle is already translated
-local function is_translated(sub)
-    return translated_subs[sub.start_time] ~= nil
-end
 
 -- Event handler for the "time-pos" property
 local function on_time_pos_change(_, movie_time)
