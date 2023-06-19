@@ -50,6 +50,21 @@ end
 local function is_translated(sub)
     return translated_subs[sub.start_time] ~= nil
 end
+local function read_file(path)
+    local file_content = ""
+    mp.msg.info('read_file:'..path)
+    local file = io.open(path, "r")
+    if not file then
+        return nil
+    end
+
+    for line in file:lines() do
+        file_content = file_content .. line .. "\n"
+    end
+
+    file:close()
+    return file_content
+end
 local function convert_time_to_seconds(time)
     local hours, minutes, seconds, milliseconds = string.match(time, "(%d+):(%d+):(%d+)[,%.](%d+)")
     return tonumber(hours) * 3600 + tonumber(minutes) * 60 + tonumber(seconds) + tonumber(milliseconds) / 1000
@@ -95,13 +110,12 @@ end
 
 local function extract_embedded_subtitles(video_file, output_sub_file, stream_index, sub_format)
     local args = {
-        "ffmpeg", "-y", "-loglevel", "quiet","-nostdin", "-i", video_file,
+        "ffmpeg", "-y", "-loglevel", "quiet", "-nostdin", "-i", video_file,
         "-c:s", "copy", "-vn", "-an", "-map", "0:" .. tostring(stream_index) .. "?", output_sub_file .. "." .. sub_format
     }
     local ffmpeg_cmd = table.concat(args, " ")
     mp.msg.info("ffmpeg command: " .. ffmpeg_cmd)
 
-    mp.msg.info('extract_embedded_subtitles: ', table_to_string(args))
     local res = utils.subprocess({ args = args })
     if res.status ~= 0 then
         mp.msg.error("Failed to extract embedded subtitles using ffmpeg")
@@ -109,6 +123,46 @@ local function extract_embedded_subtitles(video_file, output_sub_file, stream_in
         mp.msg.error(res.stderr)
         return false
     end
+
+    if sub_format == "srt" then
+        local sub_file = output_sub_file .. "." .. sub_format
+        local sub_content = read_file(sub_file)
+
+        local processed_content = ""
+        local current_sub = ""
+        local current_time_frame = ""
+        local current_index = 0
+
+        for line in sub_content:gmatch("[^\r\n]+") do
+            if tonumber(line) then
+                -- this line is an index number, ignore it
+            elseif line:match("^%d+:%d+:%d+,%d+ %-%-> %d+:%d+:%d+,%d+$") then
+                if current_sub ~= "" then
+                    current_sub = current_sub:gsub("\n", " ")
+                    processed_content = processed_content .. tostring(current_index) .. "\n" .. current_time_frame .. "\n" .. current_sub .. "\n\n"
+                end
+
+                current_time_frame = line
+                current_sub = ""
+                current_index = current_index + 1
+            else
+                current_sub = current_sub .. line .. "\n"
+            end
+        end
+
+        if current_sub ~= "" then
+            current_sub = current_sub:gsub("\n", " ")
+            processed_content = processed_content .. tostring(current_index) .. "\n" .. current_time_frame .. "\n" .. current_sub .. "\n\n"
+        end
+
+        local file = io.open(sub_file, "w")
+        if file then
+            file:write(processed_content)
+            file:close()
+        end
+    end
+
+
 
     return true
 end
@@ -197,15 +251,29 @@ local function format_ass_time(seconds)
     return string.format("%02d:%02d:%02d.%02d", hours, minutes, secs, centisecs)
 end
 local function escape_special_characters(str)
-    local escaped_str = string.gsub(str, '([\\{}%[%]%(%)%\\])', '\\%1') -- Escape necessary characters
-    escaped_str = string.gsub(escaped_str, '\n', ' ') -- Replace LF with a blank space
-    return escaped_str
+    --local escaped_str = string.gsub(str, '([\\{}%[%]%(%)%\\])', '\\%1') -- Escape necessary characters
+    --local escaped_str = string.gsub(str, '([\\{}%[%]()%.])', '')
+    -- local escaped_str = string.gsub(str, '([\\{}%[%]%(%)])', '') -- remove {}, [], and ()
+    -- escaped_str = string.gsub(escaped_str, '(\\N- |\\i%d+ )', '') -- remove \N- and \i1 or \i0 pattern
+    -- escaped_str = string.gsub(escaped_str, '(\\N- |i%d+ )', '') -- remove \N- and \i1 or \i0 pattern
+    local final_str = string.gsub(string.gsub(string.gsub(string.gsub(str, '(%b{})', ''), '(%b[])', ''), '\\i%d+', ''),'(%b())', '')
+
+    -- escaped_str = string.gsub(escaped_str, '\n', ' ') -- Replace LF with a blank space
+    -- escaped_str = string.gsub(escaped_str, '\\', ' ') -- Replace LF with a blank space
+    -- escaped_str = string.gsub(escaped_str, '\\N', ' ') -- Replace LF with a blank space
+    -- escaped_str = string.gsub(escaped_str, '{ \\i0 }', '') -- Replace LF with a blank space
+    -- escaped_str = string.gsub(escaped_str, '{ i0 }', '') -- Replace LF with a blank space
+    -- escaped_str = string.gsub(escaped_str, '{\\i0}', '') -- Replace LF with a blank space
+    -- escaped_str = string.gsub(escaped_str, '{ \\i0 }', '') -- Replace LF with a blank space
+    -- escaped_str = string.gsub(escaped_str, '{\\i1}', '') -- Replace LF with a blank space
+    -- escaped_str = string.gsub(escaped_str, '{i1}', '') -- Replace LF with a blank space
+    return final_str
 end
 
 local function display_subtitles(original_text, translated_text, start_time, end_time)
-    local duration = math.floor((end_time - start_time) * 500)
-    local formatted_original_text = string.gsub(original_text, "\\N", "\n")
-    local formatted_translated_text = string.gsub(translated_text, "\\N", "\n")
+    local duration = math.floor((end_time - start_time) * 1000)
+    local formatted_original_text = string.gsub(original_text, "\\N", " ")
+    local formatted_translated_text = string.gsub(translated_text, "\\N", " ")
     local text_to_show = string.format("%s\n%s", escape_special_characters(formatted_original_text), escape_special_characters(formatted_translated_text))
     --text_to_show = escape_special_characters(text_to_show)
     text_to_show = string.gsub(text_to_show, "'", "’")
@@ -248,21 +316,6 @@ end
 
 local lfs = require("lfs")
 
-local function read_file(path)
-    local file_content = ""
-    mp.msg.info('read_file:'..path)
-    local file = io.open(path, "r")
-    if not file then
-        return nil
-    end
-
-    for line in file:lines() do
-        file_content = file_content .. line .. "\n"
-    end
-
-    file:close()
-    return file_content
-end
 
 -- local function table_to_string(t)
 --     local result = {}
@@ -513,7 +566,10 @@ end
 local function on_time_pos_change(_, movie_time)
     --print("on_time_pos_change")
     if not movie_time then return end
-    if not subs or #subs == 0 then return end
+    if not subs or #subs == 0 then
+        print("on_time_pos_change no subs")
+        return
+    end
     print_current_and_next_translated_subs(movie_time)
     local current_subtitles = {}
     local next_subs_count = 0
@@ -534,12 +590,12 @@ local function on_time_pos_change(_, movie_time)
     end
 
     if #current_subtitles > 0 then
-        --print("on_time_pos_change current_subtitles:", subtitles_to_string(current_subtitles))
+        print("on_time_pos_change current_subtitles:", subtitles_to_string(current_subtitles))
         for i, sub in ipairs(current_subtitles) do
             if not is_translated(sub) then
                 local translated_text = translate(sub.text, target_language)
                 --local translated_text = baidu_translate(sub.text, target_language)
-                --print('translated_text: ',translated_text)
+                print('translated_text: ',translated_text)
                 if translated_text then
                     translated_subs[sub.start_time] = translated_text
                 end
