@@ -124,6 +124,7 @@ local function extract_embedded_subtitles(video_file, output_sub_file, stream_in
         return false
     end
 
+    -- If the subtitle format is 'srt', then post-process
     if sub_format == "srt" then
         local sub_file = output_sub_file .. "." .. sub_format
         local sub_content = read_file(sub_file)
@@ -161,11 +162,11 @@ local function extract_embedded_subtitles(video_file, output_sub_file, stream_in
             file:close()
         end
     end
-
-
+    -- No post-processing needed for mov_text
 
     return true
 end
+
 
 local function print_current_and_next_translated_subs(movie_time)
     print("Current and next 4 translated subtitles:")
@@ -175,7 +176,7 @@ local function print_current_and_next_translated_subs(movie_time)
         local start_time_seconds = convert_time_to_seconds(sub.start_time)
         local end_time_seconds = convert_time_to_seconds(sub.end_time)
 
-        if found_count < 5 and movie_time <= end_time_seconds then
+        if found_count < 10 and movie_time <= end_time_seconds then
             local translated_text = translated_subs[sub.start_time] or ""
             print("[" .. sub.start_time .. "] " .. translated_text)
             found_count = found_count + 1
@@ -257,7 +258,8 @@ local function escape_special_characters(str)
     -- escaped_str = string.gsub(escaped_str, '(\\N- |\\i%d+ )', '') -- remove \N- and \i1 or \i0 pattern
     -- escaped_str = string.gsub(escaped_str, '(\\N- |i%d+ )', '') -- remove \N- and \i1 or \i0 pattern
     local final_str = string.gsub(string.gsub(string.gsub(string.gsub(str, '(%b{})', ''), '(%b[])', ''), '\\i%d+', ''),'(%b())', '')
-
+    final_str = string.gsub(final_str, "<i>", "") -- Remove <i> tag
+    final_str = string.gsub(final_str, "</i>", "") -- Remove </i> tag
     -- escaped_str = string.gsub(escaped_str, '\n', ' ') -- Replace LF with a blank space
     -- escaped_str = string.gsub(escaped_str, '\\', ' ') -- Replace LF with a blank space
     -- escaped_str = string.gsub(escaped_str, '\\N', ' ') -- Replace LF with a blank space
@@ -269,11 +271,15 @@ local function escape_special_characters(str)
     -- escaped_str = string.gsub(escaped_str, '{i1}', '') -- Replace LF with a blank space
     return final_str
 end
+-- Initialize the flag
+local is_display_subtitle_called = false
 
 local function display_subtitles(original_text, translated_text, start_time, end_time)
     local duration = math.floor((end_time - start_time) * 1000)
     local formatted_original_text = string.gsub(original_text, "\\N", " ")
+    local formatted_original_text = string.gsub(original_text, "-", "")
     local formatted_translated_text = string.gsub(translated_text, "\\N", " ")
+    local formatted_translated_text = string.gsub(translated_text, "-", "")
     local text_to_show = string.format("%s\n%s", escape_special_characters(formatted_original_text), escape_special_characters(formatted_translated_text))
     --text_to_show = escape_special_characters(text_to_show)
     text_to_show = string.gsub(text_to_show, "'", "’")
@@ -281,6 +287,7 @@ local function display_subtitles(original_text, translated_text, start_time, end
     local command_string = string.format("show-text '${osd-ass-cc/0}{\\an2}{\\fs15}${osd-ass-cc/1}%s' %i", text_to_show, duration)
     print('display_subtitles command_string: ', command_string, 'duration:', duration)
     mp.command(command_string)
+    is_display_subtitle_called = true
 end
 
 local function display_subtitle(subs, movie_time)
@@ -306,12 +313,15 @@ local function display_subtitle(subs, movie_time)
                         return
                     end
                 end
+                if not is_display_subtitle_called then
+                    display_subtitles(sub.text, translated_text, start_time_seconds, end_time_seconds)
+                end
 
-                display_subtitles(sub.text, translated_text, start_time_seconds, end_time_seconds)
             end
             break
         end
     end
+    is_display_subtitle_called = false
 end
 
 local lfs = require("lfs")
@@ -476,8 +486,9 @@ function extract_english_subtitles(video_file, output_sub_file)
 
     -- Prioritize selecting the SDH stream if available
     local selected_stream = nil
+    print(table_to_string(eng_stream_indices))
     for _, stream in ipairs(eng_stream_indices) do
-        if string.lower(stream.format) == "subrip" and stream.tags and string.lower(stream.tags.title) == "sdh" then
+        if string.lower(stream.format) == "subrip" and stream.tags and string.lower(stream.tags.title) == "SDH" then
             selected_stream = stream
             break
         end
@@ -485,7 +496,7 @@ function extract_english_subtitles(video_file, output_sub_file)
 
     -- If SDH stream is not found, use the first English stream
     if not selected_stream then
-        selected_stream = eng_stream_indices[1]
+        selected_stream = eng_stream_indices[#eng_stream_indices]
     end
 
     local eng_stream_index = selected_stream.index
@@ -562,15 +573,15 @@ local function main()
 end
 
 
+
 -- Event handler for the "time-pos" property
 local function on_time_pos_change(_, movie_time)
-    --print("on_time_pos_change")
     if not movie_time then return end
     if not subs or #subs == 0 then
         print("on_time_pos_change no subs")
         return
     end
-    print_current_and_next_translated_subs(movie_time)
+
     local current_subtitles = {}
     local next_subs_count = 0
     for i, sub in ipairs(subs) do
@@ -590,22 +601,22 @@ local function on_time_pos_change(_, movie_time)
     end
 
     if #current_subtitles > 0 then
-        print("on_time_pos_change current_subtitles:", subtitles_to_string(current_subtitles))
         for i, sub in ipairs(current_subtitles) do
             if not is_translated(sub) then
                 local translated_text = translate(sub.text, target_language)
-                --local translated_text = baidu_translate(sub.text, target_language)
-                print('translated_text: ',translated_text)
                 if translated_text then
                     translated_subs[sub.start_time] = translated_text
                 end
             end
         end
+        -- Call display_subtitle function only if it hasn't been called before
         display_subtitle(current_subtitles, movie_time)
+
     else
-        print("No matching subtitle found for movie_time:", movie_time)
+        -- print("No matching subtitle found for movie_time:", movie_time)
     end
 end
+
 
 -- Observe the "time-pos" property to display subtitles at the correct time
 --mp.observe_property("time-pos", "number", on_time_pos_change)
