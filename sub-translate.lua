@@ -32,6 +32,9 @@ local subs
 local tolerance = 0.2
 local min_time_diff = 60
 local totranslate_sub_num = 20
+local function remove_extra_spaces(str)
+    return str:gsub("%s+", " ")
+end
 local function on_file_loaded()
     local video_path = mp.get_property("path")
 
@@ -109,10 +112,18 @@ local function urlencode(str)
 end
 
 local function extract_embedded_subtitles(video_file, output_sub_file, stream_index, sub_format)
-    local args = {
-        "ffmpeg", "-y", "-loglevel", "quiet", "-nostdin", "-i", video_file,
-        "-c:s", "copy", "-vn", "-an", "-map", "0:" .. tostring(stream_index) .. "?", output_sub_file .. "." .. sub_format
-    }
+    local args
+    if sub_format == "mov_text" then
+        -- 使用专门用于提取mov_text格式字幕的命令
+        args = {
+            "ffmpeg", "-i", video_file, "-map", "0:s:0" , output_sub_file .. ".srt"
+        }
+    else
+        args = {
+            "ffmpeg", "-y", "-loglevel", "quiet", "-nostdin", "-i", video_file,
+            "-c:s", "copy", "-vn", "-an", "-map", "0:" .. tostring(stream_index) .. "?", output_sub_file .. "." .. sub_format
+        }
+    end
     local ffmpeg_cmd = table.concat(args, " ")
     mp.msg.info("ffmpeg command: " .. ffmpeg_cmd)
 
@@ -124,9 +135,8 @@ local function extract_embedded_subtitles(video_file, output_sub_file, stream_in
         return false
     end
 
-    -- If the subtitle format is 'srt', then post-process
-    if sub_format == "srt" then
-        local sub_file = output_sub_file .. "." .. sub_format
+    if sub_format == "srt" or sub_format == "mov_text" then
+        local sub_file = output_sub_file .. ".srt"
         local sub_content = read_file(sub_file)
 
         local processed_content = ""
@@ -136,7 +146,7 @@ local function extract_embedded_subtitles(video_file, output_sub_file, stream_in
 
         for line in sub_content:gmatch("[^\r\n]+") do
             if tonumber(line) then
-                -- this line is an index number, ignore it
+                -- 这一行是索引号，忽略它
             elseif line:match("^%d+:%d+:%d+,%d+ %-%-> %d+:%d+:%d+,%d+$") then
                 if current_sub ~= "" then
                     current_sub = current_sub:gsub("\n", " ")
@@ -147,7 +157,7 @@ local function extract_embedded_subtitles(video_file, output_sub_file, stream_in
                 current_sub = ""
                 current_index = current_index + 1
             else
-                current_sub = current_sub .. line .. "\n"
+                current_sub = remove_extra_spaces(current_sub .. line .. "\n") -- 删除多余的空格
             end
         end
 
@@ -162,7 +172,7 @@ local function extract_embedded_subtitles(video_file, output_sub_file, stream_in
             file:close()
         end
     end
-    -- No post-processing needed for mov_text
+    -- mov_text不需要后处理
 
     return true
 end
@@ -252,23 +262,10 @@ local function format_ass_time(seconds)
     return string.format("%02d:%02d:%02d.%02d", hours, minutes, secs, centisecs)
 end
 local function escape_special_characters(str)
-    --local escaped_str = string.gsub(str, '([\\{}%[%]%(%)%\\])', '\\%1') -- Escape necessary characters
-    --local escaped_str = string.gsub(str, '([\\{}%[%]()%.])', '')
-    -- local escaped_str = string.gsub(str, '([\\{}%[%]%(%)])', '') -- remove {}, [], and ()
-    -- escaped_str = string.gsub(escaped_str, '(\\N- |\\i%d+ )', '') -- remove \N- and \i1 or \i0 pattern
-    -- escaped_str = string.gsub(escaped_str, '(\\N- |i%d+ )', '') -- remove \N- and \i1 or \i0 pattern
     local final_str = string.gsub(string.gsub(string.gsub(string.gsub(str, '(%b{})', ''), '(%b[])', ''), '\\i%d+', ''),'(%b())', '')
     final_str = string.gsub(final_str, "<i>", "") -- Remove <i> tag
     final_str = string.gsub(final_str, "</i>", "") -- Remove </i> tag
-    -- escaped_str = string.gsub(escaped_str, '\n', ' ') -- Replace LF with a blank space
-    -- escaped_str = string.gsub(escaped_str, '\\', ' ') -- Replace LF with a blank space
-    -- escaped_str = string.gsub(escaped_str, '\\N', ' ') -- Replace LF with a blank space
-    -- escaped_str = string.gsub(escaped_str, '{ \\i0 }', '') -- Replace LF with a blank space
-    -- escaped_str = string.gsub(escaped_str, '{ i0 }', '') -- Replace LF with a blank space
-    -- escaped_str = string.gsub(escaped_str, '{\\i0}', '') -- Replace LF with a blank space
-    -- escaped_str = string.gsub(escaped_str, '{ \\i0 }', '') -- Replace LF with a blank space
-    -- escaped_str = string.gsub(escaped_str, '{\\i1}', '') -- Replace LF with a blank space
-    -- escaped_str = string.gsub(escaped_str, '{i1}', '') -- Replace LF with a blank space
+
     return final_str
 end
 -- Initialize the flag
@@ -326,15 +323,6 @@ end
 
 local lfs = require("lfs")
 
-
--- local function table_to_string(t)
---     local result = {}
---     for k, v in ipairs(t) do
---         result[k] = string.format("{start_time = %s, end_time = %s, text = %s}", v.start_time, v.end_time, v.text)
---     end
---     return "{" .. table.concat(result, ", ") .. "}"
--- end
--- Function to convert subtitles table to a string representation
 local function subtitles_to_string(subs)
     local result = "{"
     for i, sub in ipairs(subs) do
@@ -361,6 +349,7 @@ local function parse_srt(subtitle_content)
     local subs = {}
 
     for index, start_time, end_time, text in string.gmatch(subtitle_content, "(%d+)\r?\n(%d+:%d+:%d+[,.]%d+)%s+-%-%>%s+(%d+:%d+:%d+[,.]%d+)\r?\n(.-)\r?\n\r?\n") do
+        text = remove_extra_spaces(text) -- 删除多余的空格
         table.insert(subs, { start_time = start_time, end_time = end_time, text = text })
     end
 
@@ -502,19 +491,27 @@ function extract_english_subtitles(video_file, output_sub_file)
     local eng_stream_index = selected_stream.index
     local eng_sub_format = selected_stream.format
 
-    if eng_sub_format ~= "ass" and eng_sub_format ~= "subrip" then
+    -- 检查字幕格式是否支持
+    if eng_sub_format ~= "ass" and eng_sub_format ~= "subrip" and eng_sub_format ~= "mov_text" then
         mp.msg.error("Unsupported subtitle format: " .. eng_sub_format)
         return false
     end
 
-    -- Set the output file's extension according to the subtitle format
-    local sub_ext = eng_sub_format == "subrip" and "srt" or "ass"
-    mp.msg.info("...Extract the English subtitle stream")
+    -- 根据字幕格式设置输出文件的扩展名
+    local sub_ext
+    if eng_sub_format == "subrip" then
+        sub_ext = "srt"
+    elseif eng_sub_format == "mov_text" then
+        sub_ext = "mov_text" -- 假设mov_text应保存为srt文件
+    else
+        sub_ext = "ass"
+    end
 
-    -- Extract the English subtitle stream
+    mp.msg.info("...Extract the English subtitle stream",eng_sub_format)
+
+    -- 提取英文字幕流
     return extract_embedded_subtitles(video_file, output_sub_file, eng_stream_index, sub_ext)
 end
-
 
 local function check_sub_file_exists(path)
     local file = io.open(path, "r")
