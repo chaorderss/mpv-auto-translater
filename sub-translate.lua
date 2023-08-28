@@ -30,11 +30,13 @@ local prev_translated_id = nil
 local prev_original_id = nil
 local subs
 local tolerance = 0.2
-local min_time_diff = 60
+local min_time_diff = 360
 local totranslate_sub_num = 20
 local function remove_extra_spaces(str)
+    str = str:gsub("[\128-\255]", " ")
     return str:gsub("%s+", " ")
 end
+
 local function on_file_loaded()
     local video_path = mp.get_property("path")
 
@@ -102,6 +104,9 @@ end
 
 local function urlencode(str)
     if str then
+        -- 只替换不在末尾的 "."
+        str = string.gsub(str, "%.(.+)", ",%1")
+
         str = string.gsub(str, "\n", "\r\n")
         str = string.gsub(str, "([^%w%-%.%_%~ ])", function(c)
             return string.format("%%%02X", string.byte(c))
@@ -110,6 +115,7 @@ local function urlencode(str)
     end
     return str
 end
+
 
 local function extract_embedded_subtitles(video_file, output_sub_file, stream_index, sub_format)
     local args
@@ -157,12 +163,13 @@ local function extract_embedded_subtitles(video_file, output_sub_file, stream_in
                 current_sub = ""
                 current_index = current_index + 1
             else
-                current_sub = remove_extra_spaces(current_sub .. line .. "\n") -- 删除多余的空格
+                current_sub = remove_extra_spaces(current_sub) .. remove_extra_spaces(line) .. "\n" -- 删除多余的空格
             end
         end
 
         if current_sub ~= "" then
             current_sub = current_sub:gsub("\n", " ")
+            current_sub = remove_extra_spaces(current_sub)
             processed_content = processed_content .. tostring(current_index) .. "\n" .. current_time_frame .. "\n" .. current_sub .. "\n\n"
         end
 
@@ -195,8 +202,10 @@ local function print_current_and_next_translated_subs(movie_time)
 end
 
 local function translate(text, target_language)
-    local url_request = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=" .. target_language .. "&dt=t&q=" .. urlencode(text)
-
+    local encodetl = urlencode(text)
+    --print('translate encodetl:',encodetl)
+    local url_request = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=" .. target_language .. "&dt=t&q=" .. encodetl
+    --print('translate url:',url_request)
     local res, err = utils.subprocess({ args = { "curl", "-s", "-S", "-f", url_request } })
 
     if not res then
@@ -262,7 +271,8 @@ local function format_ass_time(seconds)
     return string.format("%02d:%02d:%02d.%02d", hours, minutes, secs, centisecs)
 end
 local function escape_special_characters(str)
-    local final_str = string.gsub(string.gsub(string.gsub(string.gsub(str, '(%b{})', ''), '(%b[])', ''), '\\i%d+', ''),'(%b())', '')
+    --local final_str = string.gsub(string.gsub(string.gsub(string.gsub(str, '(%b{})', ''), '(%b[])', ''), '\\i%d+', ''),'(%b())', '')
+    local final_str = string.gsub(string.gsub(string.gsub(str, '(%b{})', ''), '\\i%d+', ''),'(%b())', '')
     final_str = string.gsub(final_str, "<i>", "") -- Remove <i> tag
     final_str = string.gsub(final_str, "</i>", "") -- Remove </i> tag
 
@@ -275,8 +285,10 @@ local function display_subtitles(original_text, translated_text, start_time, end
     local duration = math.floor((end_time - start_time) * 1000)
     local formatted_original_text = string.gsub(original_text, "\\N", " ")
     local formatted_original_text = string.gsub(original_text, "-", "")
+    --formatted_original_text = remove_extra_spaces(formatted_original_text)
     local formatted_translated_text = string.gsub(translated_text, "\\N", " ")
     local formatted_translated_text = string.gsub(translated_text, "-", "")
+    print('display_subtitles formatted_original_text:',formatted_original_text)
     local text_to_show = string.format("%s\n%s", escape_special_characters(formatted_original_text), escape_special_characters(formatted_translated_text))
     --text_to_show = escape_special_characters(text_to_show)
     text_to_show = string.gsub(text_to_show, "'", "’")
@@ -569,7 +581,16 @@ local function main()
     end
 end
 
-
+local function async_translate(sub, target_language)
+    coroutine.wrap(function()
+        if not is_translated(sub) then
+            local translated_text = translate(sub.text, target_language)
+            if translated_text then
+                translated_subs[sub.start_time] = translated_text
+            end
+        end
+    end)()
+end
 
 -- Event handler for the "time-pos" property
 local function on_time_pos_change(_, movie_time)
@@ -588,7 +609,7 @@ local function on_time_pos_change(_, movie_time)
         if movie_time >= start_time_seconds and movie_time <= end_time_seconds then
             table.insert(current_subtitles, sub)
         elseif movie_time < start_time_seconds then
-            if next_subs_count < 10 or (start_time_seconds - movie_time) < min_time_diff then
+            if next_subs_count < 30 or (start_time_seconds - movie_time) < min_time_diff then
                 table.insert(current_subtitles, sub)
                 next_subs_count = next_subs_count + 1
             else
@@ -598,6 +619,8 @@ local function on_time_pos_change(_, movie_time)
     end
 
     if #current_subtitles > 0 then
+        display_subtitle(current_subtitles, movie_time)
+
         for i, sub in ipairs(current_subtitles) do
             if not is_translated(sub) then
                 local translated_text = translate(sub.text, target_language)
@@ -607,7 +630,7 @@ local function on_time_pos_change(_, movie_time)
             end
         end
         -- Call display_subtitle function only if it hasn't been called before
-        display_subtitle(current_subtitles, movie_time)
+
 
     else
         -- print("No matching subtitle found for movie_time:", movie_time)
