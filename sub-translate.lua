@@ -30,8 +30,9 @@ local prev_translated_id = nil
 local prev_original_id = nil
 local subs
 local tolerance = 0.2
-local min_time_diff = 360
+local min_time_diff = 120
 local totranslate_sub_num = 20
+local current_subtitles = {}
 local function remove_extra_spaces(str)
     str = str:gsub("[\128-\255]", " ")
     return str:gsub("%s+", " ")
@@ -206,7 +207,7 @@ local function translate(text, target_language)
     --print('translate encodetl:',encodetl)
     local url_request = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=" .. target_language .. "&dt=t&q=" .. encodetl
     --print('translate url:',url_request)
-    local res, err = utils.subprocess({ args = { "curl", "-s", "-S", "-f", url_request } })
+    local res, err = utils.subprocess({ args = { "curl", "--connect-timeout", "1", "-m", "2", "-s", "-S", "-f", url_request } })
 
     if not res then
         mp.msg.error("Translation error: Failed to execute curl")
@@ -257,7 +258,7 @@ local function should_display_subtitle(sub, movie_time)
     local result = movie_time >= (start_time_seconds - tolerance) and movie_time <= end_time_seconds
 
     if result then
-        print("Subtitle match found - movie_time:", movie_time, " start_time_seconds:", start_time_seconds, " end_time_seconds:", end_time_seconds)
+        -- print("Subtitle match found - movie_time:", movie_time, " start_time_seconds:", start_time_seconds, " end_time_seconds:", end_time_seconds)
     end
 
     return result
@@ -318,19 +319,19 @@ local function display_subtitle(subs, movie_time)
                     table.remove(subs, i)
 
                     -- Display and translate the next subtitle
-                    --display_subtitle(subs, movie_time)
+                    display_subtitle(subs, movie_time)
                     return
                 end
             end
-            if not is_display_subtitle_called then
-                display_subtitles(sub.text, translated_text, start_time_seconds, end_time_seconds)
-            end
+            --if not is_display_subtitle_called then
+            display_subtitles(sub.text, translated_text, start_time_seconds, end_time_seconds)
+            --end
 
             --end
             break
         end
     end
-    is_display_subtitle_called = false
+    --is_display_subtitle_called = false
 end
 
 local lfs = require("lfs")
@@ -580,15 +581,23 @@ local function main()
         return
     end
 end
+local function on_subtitle_translated(movie_time)
+    -- 在这里更新或显示翻译完成的字幕
+    -- 例如，你可以调用 display_subtitles 函数
+    display_subtitle(current_subtitles, movie_time)
+end
 
-local function async_translate(sub, target_language)
+
+local function async_translate(sub, target_language,movie_time)
     coroutine.wrap(function()
         if not is_translated(sub) then
             local translated_text = translate(sub.text, target_language)
+            print("async_translate One subtitle translated:", translated_text)
             if translated_text then
                 translated_subs[sub.start_time] = translated_text
             end
         end
+        on_subtitle_translated(movie_time)
     end)()
 end
 
@@ -599,8 +608,6 @@ local function on_time_pos_change(_, movie_time)
         print("on_time_pos_change no subs")
         return
     end
-
-    local current_subtitles = {}
     local next_subs_count = 0
     for i, sub in ipairs(subs) do
         local start_time_seconds = convert_time_to_seconds(sub.start_time)
@@ -609,7 +616,7 @@ local function on_time_pos_change(_, movie_time)
         if movie_time >= start_time_seconds and movie_time <= end_time_seconds then
             table.insert(current_subtitles, sub)
         elseif movie_time < start_time_seconds then
-            if next_subs_count < 30 or (start_time_seconds - movie_time) < min_time_diff then
+            if next_subs_count < totranslate_sub_num or (start_time_seconds - movie_time) < min_time_diff then
                 table.insert(current_subtitles, sub)
                 next_subs_count = next_subs_count + 1
             else
@@ -623,11 +630,11 @@ local function on_time_pos_change(_, movie_time)
     end)
 
     --print("on_time_pos_change:",table_to_string(current_subtitles))
-    print("on_time_pos_change translated_subs:",table_to_string(translated_subs))
-    display_subtitle(current_subtitles, movie_time)
+    --print("on_time_pos_change translated_subs:",table_to_string(translated_subs))
+    --display_subtitle(current_subtitles, movie_time)
     if #current_subtitles > 0 then
         for i, sub in ipairs(current_subtitles) do
-            async_translate(sub, target_language)
+            async_translate(sub, target_language,movie_time)
         end
     else
         -- print("No matching subtitle found for movie_time:", movie_time)
@@ -636,13 +643,15 @@ end
 
 
 -- Observe the "time-pos" property to display subtitles at the correct time
---mp.observe_property("time-pos", "number", on_time_pos_change)
-local function timer_callback()
-    local movie_time = mp.get_property_number("time-pos")
-    on_time_pos_change(nil, movie_time)
-end
+mp.observe_property("time-pos", "number", on_time_pos_change)
+-- local function timer_callback()
+--     local movie_time = mp.get_property_number("time-pos")
+--     on_time_pos_change(nil, movie_time)
+-- end
 
-local timer = mp.add_periodic_timer(0.2, timer_callback)
+--local timer = mp.add_periodic_timer(0.2, timer_callback2)
+--local timer = mp.add_periodic_timer(0.2, timer_callback)
+
 
 mp.register_event("file-loaded", main)
 mp.register_event("file-loaded", on_file_loaded)
