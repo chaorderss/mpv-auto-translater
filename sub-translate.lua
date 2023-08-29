@@ -288,7 +288,7 @@ local function display_subtitles(original_text, translated_text, start_time, end
     --formatted_original_text = remove_extra_spaces(formatted_original_text)
     local formatted_translated_text = string.gsub(translated_text, "\\N", " ")
     local formatted_translated_text = string.gsub(translated_text, "-", "")
-    print('display_subtitles formatted_original_text:',formatted_original_text)
+    --print('display_subtitles formatted_original_text:',formatted_original_text)
     local text_to_show = string.format("%s\n%s", escape_special_characters(formatted_original_text), escape_special_characters(formatted_translated_text))
     --text_to_show = escape_special_characters(text_to_show)
     text_to_show = string.gsub(text_to_show, "'", "’")
@@ -303,30 +303,30 @@ local function display_subtitle(subs, movie_time)
     for i, sub in ipairs(subs) do
         if should_display_subtitle(sub, movie_time) then
             local translated_text = translated_subs[sub.start_time] or sub.text
-            print("translated_text",translated_text)
-            if translated_text then
-                translated_subs[sub.start_time] = translated_text
-                local start_time_seconds = convert_time_to_seconds(sub.start_time)
-                local end_time_seconds = convert_time_to_seconds(sub.end_time)
+            --print("translated_text",translated_text)
+            --if translated_text then
+            translated_subs[sub.start_time] = translated_text
+            local start_time_seconds = convert_time_to_seconds(sub.start_time)
+            local end_time_seconds = convert_time_to_seconds(sub.end_time)
 
-                -- Check if the next subtitle's start time is now
-                local next_sub = subs[i + 1]
-                if next_sub then
-                    local next_start_time_seconds = convert_time_to_seconds(next_sub.start_time)
-                    if next_start_time_seconds <= movie_time then
-                        -- Remove current subtitle
-                        table.remove(subs, i)
+            -- Check if the next subtitle's start time is now
+            local next_sub = subs[i + 1]
+            if next_sub then
+                local next_start_time_seconds = convert_time_to_seconds(next_sub.start_time)
+                if next_start_time_seconds <= movie_time then
+                    -- Remove current subtitle
+                    table.remove(subs, i)
 
-                        -- Display and translate the next subtitle
-                        display_subtitle(subs, movie_time)
-                        return
-                    end
+                    -- Display and translate the next subtitle
+                    --display_subtitle(subs, movie_time)
+                    return
                 end
-                if not is_display_subtitle_called then
-                    display_subtitles(sub.text, translated_text, start_time_seconds, end_time_seconds)
-                end
-
             end
+            if not is_display_subtitle_called then
+                display_subtitles(sub.text, translated_text, start_time_seconds, end_time_seconds)
+            end
+
+            --end
             break
         end
     end
@@ -617,21 +617,18 @@ local function on_time_pos_change(_, movie_time)
             end
         end
     end
+    -- Sort the current_subtitles by start_time
+    table.sort(current_subtitles, function(a, b)
+        return convert_time_to_seconds(a.start_time) > convert_time_to_seconds(b.start_time)
+    end)
 
+    --print("on_time_pos_change:",table_to_string(current_subtitles))
+    print("on_time_pos_change translated_subs:",table_to_string(translated_subs))
+    display_subtitle(current_subtitles, movie_time)
     if #current_subtitles > 0 then
-        display_subtitle(current_subtitles, movie_time)
-
         for i, sub in ipairs(current_subtitles) do
-            if not is_translated(sub) then
-                local translated_text = translate(sub.text, target_language)
-                if translated_text then
-                    translated_subs[sub.start_time] = translated_text
-                end
-            end
+            async_translate(sub, target_language)
         end
-        -- Call display_subtitle function only if it hasn't been called before
-
-
     else
         -- print("No matching subtitle found for movie_time:", movie_time)
     end
