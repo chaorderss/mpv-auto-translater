@@ -35,6 +35,36 @@ local tolerance = 0.2
 local min_time_diff = 160
 local totranslate_sub_num = 20
 local current_subtitles = {}
+local translation_redis_key
+-- local redis = require "resty.redis"
+local redis = require 'redis'
+
+local function connect_to_redis()
+    local client, err = redis.connect('127.0.0.1', 6379)
+    if not client then
+        print("Failed to connect to Redis: ", err)
+        return nil
+    end
+    return client
+end
+local client = connect_to_redis()
+
+local function read_from_redis(key)
+    local res, err = client:get(key)
+    if err then
+        print("Key not found in Redis or error: ", err)
+        return nil
+    end
+    return res
+end
+
+local function write_to_redis(key, value)
+    local res, err = client:set(key, value)
+    if err then
+        print("Failed to write to Redis: ", err)
+    end
+end
+
 local function remove_extra_spaces(str)
     str = str:gsub("[\128-\255]", " ")
     return str:gsub("%s+", " ")
@@ -331,22 +361,29 @@ local function display_subtitle(movie_time)
     --local subs = deep_copy(subs)
     for i, sub in ipairs(subs_cp) do
         if should_display_subtitle(sub, movie_time) then
-            local translated_text = translated_subs_cp[sub.start_time] or sub.text
-            --print("translated_text",translated_text)
-            --if translated_text then
-            translated_subs_cp[sub.start_time] = translated_text
+
+            local cache_key = "translated:" .. sub.start_time
+            local translated_text = read_from_redis(cache_key) or sub.text
+            --print("display_subtitle redis translated_text:",translated_text)
+            -- 如果在 Redis 中没有找到翻译，也可以从本地字典中尝试找
+            if not translated_text then
+                translated_text = translated_subs_cp[sub.start_time] or sub.text
+            end
+
+            --translated_subs_cp[sub.start_time] = translated_text
+
             local start_time_seconds = convert_time_to_seconds(sub.start_time)
             local end_time_seconds = convert_time_to_seconds(sub.end_time)
 
-            -- Check if the next subtitle's start time is now
+            -- 检查下一个字幕的开始时间
             local next_sub = subs_cp[i + 1]
             if next_sub then
                 local next_start_time_seconds = convert_time_to_seconds(next_sub.start_time)
                 if next_start_time_seconds <= movie_time then
-                    -- Remove current subtitle
+                    -- 移除当前的字幕
                     table.remove(subs_cp, i)
 
-                    -- Display and translate the next subtitle
+                    -- 显示和翻译下一个字幕
                     display_subtitle(subs_cp,movie_time)
                     return
                 end
@@ -359,6 +396,7 @@ local function display_subtitle(movie_time)
     end
     --is_display_subtitle_called = false
 end
+
 
 local lfs = require("lfs")
 
@@ -573,6 +611,12 @@ local function check_sub_file_exists(path, extensions)
 end
 
 local function main()
+    print("Lua modules are searched in these paths: ")
+    print(package.path)
+
+    print("C modules are searched in these paths: ")
+    print(package.cpath)
+
     local video_file = mp.get_property("path")
     if not video_file then
         mp.msg.error("No video file loaded")
@@ -583,6 +627,11 @@ local function main()
     local video_dir, video_name = utils.split_path(video_file)
     local video_name_no_ext = video_name:match("(.+)%..+$")
     local output_sub_file = utils.join_path(video_dir, video_name_no_ext)
+
+    translation_redis_key = string.match(video_name_no_ext, "(.-S%d+E%d+)")
+    translation_redis_key = translation_redis_key:gsub(" ","")
+    print('translation_redis_key:',translation_redis_key)
+
 
     mp.msg.info("output_sub_file: ".. output_sub_file)
     local sub_extensions = {'.ass', '.srt'}
@@ -615,13 +664,22 @@ local function on_subtitle_translated(movie_time)
 end
 
 
-local function async_translate(sub, target_language,movie_time)
+local function async_translate(sub, target_language, movie_time)
     coroutine.wrap(function()
-        if not is_translated(sub) then
-            local translated_text = translate(sub.text, target_language)
-            print("async_translate One subtitle translated:", translated_text)
-            if translated_text then
-                translated_subs[sub.start_time] = translated_text
+        local cache_key = "translated:" .. sub.start_time
+        local cached_translation = read_from_redis(cache_key)
+
+        if cached_translation then
+            --print("Translation found in Redis:", cached_translation)
+            translated_subs[sub.start_time] = cached_translation
+        else
+            if not is_translated(sub) then
+                local translated_text = translate(sub.text, target_language)
+                print("async_translate One subtitle translated:", translated_text)
+                if translated_text then
+                    write_to_redis(cache_key, translated_text)
+                    --translated_subs[sub.start_time] = translated_text
+                end
             end
         end
         on_subtitle_translated(movie_time)
