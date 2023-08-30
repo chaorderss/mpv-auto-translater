@@ -23,20 +23,46 @@ local http = require("socket.http")
 local target_language = "zh-CN"
 -- Global table for translated subtitles
 translated_subs = {}
+translated_subs_cp = {}
 -- Set the pre-fetch delay in seconds
 local pre_fetch_delay = 1
 -- Set the path to the output subtitle file
 local prev_translated_id = nil
 local prev_original_id = nil
 local subs
+local subs_cp
 local tolerance = 0.2
-local min_time_diff = 120
+local min_time_diff = 160
 local totranslate_sub_num = 20
 local current_subtitles = {}
 local function remove_extra_spaces(str)
     str = str:gsub("[\128-\255]", " ")
     return str:gsub("%s+", " ")
 end
+
+function shallow_copy(orig)
+    local copy = {}
+    for k, v in pairs(orig) do
+        copy[k] = v
+    end
+    return copy
+end
+
+function deep_copy(orig)
+    local orig_type = type(orig)
+    local copy
+    if orig_type == 'table' then
+        copy = {}
+        for orig_key, orig_value in next, orig, nil do
+            copy[deep_copy(orig_key)] = deep_copy(orig_value)
+        end
+        setmetatable(copy, deep_copy(getmetatable(orig)))
+    else -- number, string, boolean, etc
+        copy = orig
+    end
+    return copy
+end
+
 
 local function on_file_loaded()
     local video_path = mp.get_property("path")
@@ -207,7 +233,8 @@ local function translate(text, target_language)
     --print('translate encodetl:',encodetl)
     local url_request = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=" .. target_language .. "&dt=t&q=" .. encodetl
     --print('translate url:',url_request)
-    local res, err = utils.subprocess({ args = { "curl", "--connect-timeout", "1", "-m", "2", "-s", "-S", "-f", url_request } })
+    local res, err = utils.subprocess({ args = { "curl", "--connect-timeout", "0.6", "-m", "2", "-s", "-S", "-f", url_request } })
+    --local res, err = utils.subprocess({ args = { "curl", "-s", "-S", "-f", url_request } })
 
     if not res then
         mp.msg.error("Translation error: Failed to execute curl")
@@ -295,39 +322,38 @@ local function display_subtitles(original_text, translated_text, start_time, end
     text_to_show = string.gsub(text_to_show, "'", "’")
 
     local command_string = string.format("show-text '${osd-ass-cc/0}{\\an2}{\\fs15}${osd-ass-cc/1}%s' %i", text_to_show, duration)
-    print('display_subtitles command_string: ', command_string, 'duration:', duration)
+    -- print('display_subtitles command_string: ', command_string, 'duration:', duration)
     mp.command(command_string)
     is_display_subtitle_called = true
 end
 
-local function display_subtitle(subs, movie_time)
-    for i, sub in ipairs(subs) do
+local function display_subtitle(movie_time)
+    --local subs = deep_copy(subs)
+    for i, sub in ipairs(subs_cp) do
         if should_display_subtitle(sub, movie_time) then
-            local translated_text = translated_subs[sub.start_time] or sub.text
+            local translated_text = translated_subs_cp[sub.start_time] or sub.text
             --print("translated_text",translated_text)
             --if translated_text then
-            translated_subs[sub.start_time] = translated_text
+            translated_subs_cp[sub.start_time] = translated_text
             local start_time_seconds = convert_time_to_seconds(sub.start_time)
             local end_time_seconds = convert_time_to_seconds(sub.end_time)
 
             -- Check if the next subtitle's start time is now
-            local next_sub = subs[i + 1]
+            local next_sub = subs_cp[i + 1]
             if next_sub then
                 local next_start_time_seconds = convert_time_to_seconds(next_sub.start_time)
                 if next_start_time_seconds <= movie_time then
                     -- Remove current subtitle
-                    table.remove(subs, i)
+                    table.remove(subs_cp, i)
 
                     -- Display and translate the next subtitle
-                    display_subtitle(subs, movie_time)
+                    display_subtitle(subs_cp,movie_time)
                     return
                 end
             end
-            --if not is_display_subtitle_called then
-            display_subtitles(sub.text, translated_text, start_time_seconds, end_time_seconds)
-            --end
 
-            --end
+            display_subtitles(sub.text, translated_text, start_time_seconds, end_time_seconds)
+
             break
         end
     end
@@ -576,6 +602,7 @@ local function main()
     end
 
     subs = get_subtitles_from_file(output_sub_file .. sub_ext)
+    subs_cp = deep_copy(subs)
     if not subs then
         mp.msg.error("main Failed to load subtitles from file")
         return
@@ -584,7 +611,7 @@ end
 local function on_subtitle_translated(movie_time)
     -- 在这里更新或显示翻译完成的字幕
     -- 例如，你可以调用 display_subtitles 函数
-    display_subtitle(current_subtitles, movie_time)
+    display_subtitle(movie_time)
 end
 
 
@@ -608,6 +635,7 @@ local function on_time_pos_change(_, movie_time)
         print("on_time_pos_change no subs")
         return
     end
+    translated_subs_cp = deep_copy(translated_subs)
     local next_subs_count = 0
     for i, sub in ipairs(subs) do
         local start_time_seconds = convert_time_to_seconds(sub.start_time)
@@ -631,7 +659,8 @@ local function on_time_pos_change(_, movie_time)
 
     --print("on_time_pos_change:",table_to_string(current_subtitles))
     --print("on_time_pos_change translated_subs:",table_to_string(translated_subs))
-    --display_subtitle(current_subtitles, movie_time)
+    display_subtitle(movie_time)
+
     if #current_subtitles > 0 then
         for i, sub in ipairs(current_subtitles) do
             async_translate(sub, target_language,movie_time)
@@ -643,14 +672,14 @@ end
 
 
 -- Observe the "time-pos" property to display subtitles at the correct time
-mp.observe_property("time-pos", "number", on_time_pos_change)
--- local function timer_callback()
---     local movie_time = mp.get_property_number("time-pos")
---     on_time_pos_change(nil, movie_time)
--- end
+-- mp.observe_property("time-pos", "number", on_time_pos_change)
+local function timer_callback()
+    local movie_time = mp.get_property_number("time-pos")
+    on_time_pos_change(nil, movie_time)
+end
 
 --local timer = mp.add_periodic_timer(0.2, timer_callback2)
---local timer = mp.add_periodic_timer(0.2, timer_callback)
+local timer = mp.add_periodic_timer(0.1, timer_callback)
 
 
 mp.register_event("file-loaded", main)
