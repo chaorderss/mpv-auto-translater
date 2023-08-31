@@ -263,7 +263,7 @@ local function translate(text, target_language)
     --print('translate encodetl:',encodetl)
     local url_request = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=" .. target_language .. "&dt=t&q=" .. encodetl
     --print('translate url:',url_request)
-    local res, err = utils.subprocess({ args = { "curl", "--connect-timeout", "0.6", "-m", "2", "-s", "-S", "-f", url_request } })
+    local res, err = utils.subprocess({ args = { "curl", "--connect-timeout", "1", "-m", "1", "-s", "-S", "-f", url_request } })
     --local res, err = utils.subprocess({ args = { "curl", "-s", "-S", "-f", url_request } })
 
     if not res then
@@ -362,7 +362,7 @@ local function display_subtitle(movie_time)
     for i, sub in ipairs(subs_cp) do
         if should_display_subtitle(sub, movie_time) then
 
-            local cache_key = "translated:" .. sub.start_time
+            local cache_key = translation_redis_key .. ":" .. sub.start_time
             local translated_text = read_from_redis(cache_key) or sub.text
             --print("display_subtitle redis translated_text:",translated_text)
             -- 如果在 Redis 中没有找到翻译，也可以从本地字典中尝试找
@@ -388,13 +388,14 @@ local function display_subtitle(movie_time)
                     return
                 end
             end
-
-            display_subtitles(sub.text, translated_text, start_time_seconds, end_time_seconds)
+            if not is_display_subtitle_called then
+                display_subtitles(sub.text, translated_text, start_time_seconds, end_time_seconds)
+            end
 
             break
         end
     end
-    --is_display_subtitle_called = false
+    is_display_subtitle_called = false
 end
 
 
@@ -663,17 +664,17 @@ local function on_subtitle_translated(movie_time)
     display_subtitle(movie_time)
 end
 
-
 local function async_translate(sub, target_language, movie_time)
     coroutine.wrap(function()
-        local cache_key = "translated:" .. sub.start_time
+        local cache_key = translation_redis_key .. ":" .. sub.start_time
         local cached_translation = read_from_redis(cache_key)
-
         if cached_translation then
             --print("Translation found in Redis:", cached_translation)
-            translated_subs[sub.start_time] = cached_translation
+            --translated_subs[sub.start_time] = cached_translation
+
         else
             if not is_translated(sub) then
+                on_subtitle_translated(movie_time)
                 local translated_text = translate(sub.text, target_language)
                 print("async_translate One subtitle translated:", translated_text)
                 if translated_text then
@@ -682,7 +683,6 @@ local function async_translate(sub, target_language, movie_time)
                 end
             end
         end
-        on_subtitle_translated(movie_time)
     end)()
 end
 
@@ -717,7 +717,6 @@ local function on_time_pos_change(_, movie_time)
 
     --print("on_time_pos_change:",table_to_string(current_subtitles))
     --print("on_time_pos_change translated_subs:",table_to_string(translated_subs))
-    display_subtitle(movie_time)
 
     if #current_subtitles > 0 then
         for i, sub in ipairs(current_subtitles) do
@@ -726,20 +725,28 @@ local function on_time_pos_change(_, movie_time)
     else
         -- print("No matching subtitle found for movie_time:", movie_time)
     end
+
+    display_subtitle(movie_time)
+
 end
 
 
 -- Observe the "time-pos" property to display subtitles at the correct time
--- mp.observe_property("time-pos", "number", on_time_pos_change)
+
+
 local function timer_callback()
     local movie_time = mp.get_property_number("time-pos")
     on_time_pos_change(nil, movie_time)
 end
-
+local function timer_callback2()
+    local movie_time = mp.get_property_number("time-pos")
+    translate_timer(nil, movie_time)
+end
 --local timer = mp.add_periodic_timer(0.2, timer_callback2)
 local timer = mp.add_periodic_timer(0.1, timer_callback)
+--local timer = mp.add_periodic_timer(0.1, timer_callback2)
 
-
+-- mp.observe_property("time-pos", "number", translate_timer)
 mp.register_event("file-loaded", main)
 mp.register_event("file-loaded", on_file_loaded)
 
