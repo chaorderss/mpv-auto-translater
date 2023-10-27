@@ -18,6 +18,7 @@ local utils = require 'mp.utils'
 local json = require 'dkjson'
 local md5 = require("md5")
 local http = require("socket.http")
+local ltn12 = require("ltn12")
 
 -- Set your desired target language here
 local target_language = "zh-CN"
@@ -31,9 +32,9 @@ local prev_translated_id = nil
 local prev_original_id = nil
 local subs
 local subs_cp
-local tolerance = 0.2
-local min_time_diff = 160
-local totranslate_sub_num = 20
+local tolerance = 0.1
+local min_time_diff = 300
+local totranslate_sub_num = 10
 local current_subtitles = {}
 local translation_redis_key
 -- local redis = require "resty.redis"
@@ -260,21 +261,25 @@ end
 
 local function translate(text, target_language)
     local encodetl = urlencode(text)
-    --print('translate encodetl:',encodetl)
     local url_request = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=" .. target_language .. "&dt=t&q=" .. encodetl
-    --print('translate url:',url_request)
-    local res, err = utils.subprocess({ args = { "curl", "--connect-timeout", "1", "-m", "1", "-s", "-S", "-f", url_request } })
-    --local res, err = utils.subprocess({ args = { "curl", "-s", "-S", "-f", url_request } })
+
+    local response_body = {}
+    local res, status_code, headers, status = http.request {
+        url = url_request,
+        method = "GET",
+        sink = ltn12.sink.table(response_body),
+        timeout = 1 -- 10 second timeout
+    }
 
     if not res then
-        mp.msg.error("Translation error: Failed to execute curl")
+        mp.msg.error("Translation error: HTTP request failed")
         return nil
-    elseif res.status ~= 0 then
-        mp.msg.error("Translation error: HTTP error code: " .. tostring(res.status))
+    elseif status_code ~= 200 then
+        mp.msg.error("Translation error: HTTP error code: " .. tostring(status_code))
         return nil
     end
 
-    local result = json.decode(res.stdout)
+    local result = json.decode(table.concat(response_body))
 
     if result and result[1] and result[1][1] and result[1][1][1] then
         return result[1][1][1]
@@ -283,6 +288,7 @@ local function translate(text, target_language)
         return nil
     end
 end
+
 
 local function baidu_translate(text, target_language)
     local app_id = "" -- Replace with your Baidu API App ID
@@ -309,16 +315,30 @@ local function baidu_translate(text, target_language)
     return nil
 end
 
-local function should_display_subtitle(sub, movie_time)
+local function should_display_subtitle(sub)
     local start_time_seconds = convert_time_to_seconds(sub.start_time)
     local end_time_seconds = convert_time_to_seconds(sub.end_time)
-    local result = movie_time >= (start_time_seconds - tolerance) and movie_time <= end_time_seconds
+    -- print("Subtitle match found - movie_time:", movie_time, " start_time_seconds:", start_time_seconds, " end_time_seconds:", end_time_seconds)
+    if type(movie_time) == "table" then
+        return false
+    end
+    local movie_time = mp.get_property_number("time-pos")
+    local result = movie_time >= start_time_seconds - 0.5 and movie_time <= end_time_seconds
 
     if result then
         -- print("Subtitle match found - movie_time:", movie_time, " start_time_seconds:", start_time_seconds, " end_time_seconds:", end_time_seconds)
     end
 
     return result
+end
+local function safe_should_display_subtitle(...)
+    local status, result = pcall(should_display_subtitle, ...)
+    if status then
+        return result
+    else
+        print("An error occurred: " .. result)
+        return false
+    end
 end
 
 local function format_ass_time(seconds)
@@ -340,12 +360,13 @@ end
 local is_display_subtitle_called = false
 
 local function display_subtitles(original_text, translated_text, start_time, end_time)
-    local duration = math.floor((end_time - start_time) * 1000)
+    local movie_time = mp.get_property_number("time-pos")
+    local duration = math.floor((end_time - movie_time) * 1000)
     local formatted_original_text = string.gsub(original_text, "\\N", " ")
-    local formatted_original_text = string.gsub(original_text, "-", "")
+    formatted_original_text = string.gsub(formatted_original_text, "-", "")
     --formatted_original_text = remove_extra_spaces(formatted_original_text)
     local formatted_translated_text = string.gsub(translated_text, "\\N", " ")
-    local formatted_translated_text = string.gsub(translated_text, "-", "")
+    formatted_translated_text = string.gsub(formatted_translated_text, "-", "")
     --print('display_subtitles formatted_original_text:',formatted_original_text)
     local text_to_show = string.format("%s\n%s", escape_special_characters(formatted_original_text), escape_special_characters(formatted_translated_text))
     --text_to_show = escape_special_characters(text_to_show)
@@ -357,34 +378,41 @@ local function display_subtitles(original_text, translated_text, start_time, end
     is_display_subtitle_called = true
 end
 
-local function display_subtitle(movie_time)
+local function display_subtitle()
     --local subs = deep_copy(subs)
+    local movie_time = mp.get_property_number("time-pos")
     for i, sub in ipairs(subs_cp) do
-        if should_display_subtitle(sub, movie_time) then
-
+        if safe_should_display_subtitle(sub) then
             local cache_key = translation_redis_key .. ":" .. sub.start_time
             local translated_text = read_from_redis(cache_key) or sub.text
             --print("display_subtitle redis translated_text:",translated_text)
             -- 如果在 Redis 中没有找到翻译，也可以从本地字典中尝试找
-            if not translated_text then
-                translated_text = translated_subs_cp[sub.start_time] or sub.text
-            end
+            -- if not translated_text then
+            --     translated_text = translated_subs[sub.start_time] or sub.text
+            -- end
 
             --translated_subs_cp[sub.start_time] = translated_text
 
             local start_time_seconds = convert_time_to_seconds(sub.start_time)
             local end_time_seconds = convert_time_to_seconds(sub.end_time)
-
+            --print('display_subtitle movie_time:',movie_time,'sub_time:',start_time_seconds)
             -- 检查下一个字幕的开始时间
             local next_sub = subs_cp[i + 1]
             if next_sub then
                 local next_start_time_seconds = convert_time_to_seconds(next_sub.start_time)
-                if next_start_time_seconds <= movie_time then
+                if next_start_time_seconds <= movie_time or movie_time >= end_time_seconds then
                     -- 移除当前的字幕
-                    table.remove(subs_cp, i)
-
+                    for j = 1, i do
+                        table.remove(subs_cp, 1)
+                    end
+                    -- mp.command("show-text '' 0")
                     -- 显示和翻译下一个字幕
-                    display_subtitle(subs_cp,movie_time)
+                    -- display_subtitle(movie_time)
+                    local cache_key = translation_redis_key .. ":" .. next_sub.start_time
+                    local translated_text = read_from_redis(cache_key) or next_sub.text
+                    local start_time_seconds = convert_time_to_seconds(next_sub.start_time)
+                    local end_time_seconds = convert_time_to_seconds(next_sub.end_time)
+                    display_subtitles(next_sub.text, translated_text, start_time_seconds, end_time_seconds)
                     return
                 end
             end
@@ -629,7 +657,7 @@ local function main()
     local video_name_no_ext = video_name:match("(.+)%..+$")
     local output_sub_file = utils.join_path(video_dir, video_name_no_ext)
 
-    translation_redis_key = string.match(video_name_no_ext, "(.-S%d+E%d+)")
+    translation_redis_key = string.match(video_name_no_ext, "(.-[Ee]%d+)")
     translation_redis_key = translation_redis_key:gsub(" ","")
     print('translation_redis_key:',translation_redis_key)
 
@@ -674,12 +702,12 @@ local function async_translate(sub, target_language, movie_time)
 
         else
             if not is_translated(sub) then
-                on_subtitle_translated(movie_time)
+                -- on_subtitle_translated(movie_time)
                 local translated_text = translate(sub.text, target_language)
                 print("async_translate One subtitle translated:", translated_text)
                 if translated_text then
                     write_to_redis(cache_key, translated_text)
-                    --translated_subs[sub.start_time] = translated_text
+                    translated_subs[sub.start_time] = translated_text
                 end
             end
         end
@@ -693,7 +721,7 @@ local function on_time_pos_change(_, movie_time)
         print("on_time_pos_change no subs")
         return
     end
-    translated_subs_cp = deep_copy(translated_subs)
+    -- translated_subs_cp = deep_copy(translated_subs)
     local next_subs_count = 0
     for i, sub in ipairs(subs) do
         local start_time_seconds = convert_time_to_seconds(sub.start_time)
@@ -743,10 +771,10 @@ local function timer_callback2()
     translate_timer(nil, movie_time)
 end
 --local timer = mp.add_periodic_timer(0.2, timer_callback2)
-local timer = mp.add_periodic_timer(0.1, timer_callback)
+-- local timer = mp.add_periodic_timer(0.1, timer_callback)
 --local timer = mp.add_periodic_timer(0.1, timer_callback2)
 
--- mp.observe_property("time-pos", "number", translate_timer)
+mp.observe_property("time-pos", "number", on_time_pos_change)
 mp.register_event("file-loaded", main)
 mp.register_event("file-loaded", on_file_loaded)
 
