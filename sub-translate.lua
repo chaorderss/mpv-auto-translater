@@ -33,7 +33,7 @@ local prev_original_id = nil
 local subs
 local subs_cp
 local tolerance = 0.1
-local min_time_diff = 300
+local min_time_diff = 1000
 local totranslate_sub_num = 10
 local current_subtitles = {}
 local translation_redis_key
@@ -260,6 +260,10 @@ local function print_current_and_next_translated_subs(movie_time)
 end
 
 local function translate(text, target_language)
+    print("to be translate text:" ,text," ",type(text))
+    if not text then
+        return nil
+    end
     local encodetl = urlencode(text)
     local url_request = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=" .. target_language .. "&dt=t&q=" .. encodetl
 
@@ -278,9 +282,9 @@ local function translate(text, target_language)
         mp.msg.error("Translation error: HTTP error code: " .. tostring(status_code))
         return nil
     end
-
+    print("translated response_body:",table_to_string(response_body))
     local result = json.decode(table.concat(response_body))
-
+    print("translated:",result)
     if result and result[1] and result[1][1] and result[1][1][1] then
         return result[1][1][1]
     else
@@ -656,8 +660,8 @@ local function main()
     local video_dir, video_name = utils.split_path(video_file)
     local video_name_no_ext = video_name:match("(.+)%..+$")
     local output_sub_file = utils.join_path(video_dir, video_name_no_ext)
-
-    translation_redis_key = string.match(video_name_no_ext, "(.-[Ee]%d+)")
+    print('video_name_no_ext',video_name_no_ext)
+    translation_redis_key = string.match(video_name_no_ext, "(%S+)[%.Ee](%d%d)")
     translation_redis_key = translation_redis_key:gsub(" ","")
     print('translation_redis_key:',translation_redis_key)
 
@@ -691,6 +695,14 @@ local function on_subtitle_translated(movie_time)
     -- 例如，你可以调用 display_subtitles 函数
     display_subtitle(movie_time)
 end
+-- local function is_only_whitespace(str)
+--     for _, codepoint in utf8.codes(str) do
+--         if not utf8.match(utf8.char(codepoint), "%s") then
+--             return false
+--         end
+--     end
+--     return true
+-- end
 
 local function async_translate(sub, target_language, movie_time)
     coroutine.wrap(function()
@@ -701,13 +713,15 @@ local function async_translate(sub, target_language, movie_time)
             --translated_subs[sub.start_time] = cached_translation
 
         else
-            if not is_translated(sub) then
+            if not is_translated(sub) and sub.text:match("%S") and sub.text then  -- 检查是否仅包含空白字符
                 -- on_subtitle_translated(movie_time)
-                local translated_text = translate(sub.text, target_language)
-                print("async_translate One subtitle translated:", translated_text)
-                if translated_text then
-                    write_to_redis(cache_key, translated_text)
-                    translated_subs[sub.start_time] = translated_text
+                if sub.text then
+                    local translated_text = translate(sub.text, target_language)
+                    print("async_translate One subtitle translated:", translated_text)
+                    if translated_text then
+                        write_to_redis(cache_key, translated_text)
+                        translated_subs[sub.start_time] = translated_text
+                    end
                 end
             end
         end
